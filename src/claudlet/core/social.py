@@ -43,13 +43,8 @@ def arrange(act, leader, companions, creature_h, gap=GAP, foot=0.0, head=0.0):
             out.append((tx, y, _face(tx + w / 2.0, lcx), "settle"))
             cur = (tx - gap) if side < 0 else (tx + w + gap)
         return out
-    if act == "stack":                        # 리더 머리 위로 발이 닿게 누적(탑)
-        # base = level-0 컴패니언의 창-top: 발(foot)이 리더 머리(ly+head)에 닿음.
-        # 위 층은 몸통 높이(creature_h)만큼씩 올림(패딩 아닌 그려지는 높이).
-        base = ly + head - foot
-        for k, (x, y, w) in enumerate(companions):
-            out.append((lcx - w / 2.0, base - k * creature_h, 1, "idle"))
-        return out
+    if act == "stack":
+        return arrange_pocket(leader, companions, creature_h, foot, head)
     if act == "highfive":                     # 가장 가까운 1마리만 붙어서 팔 듦
         near = min(range(len(companions)),
                    key=lambda i: abs(companions[i][0] + companions[i][2] / 2.0 - lcx))
@@ -62,3 +57,29 @@ def arrange(act, leader, companions, creature_h, gap=GAP, foot=0.0, head=0.0):
                 out.append((x, y, _face(x + w / 2.0, lcx), "idle"))
         return out
     return [(x, y, 1, "idle") for (x, y, w) in companions]
+
+
+def arrange_pocket(leader, companions, creature_h, foot, head, gap=0.0,
+                   drop=12.0, inset=6.0, shift=0.5):
+    """고정 주머니 배치: 1명 중앙, 2명 나란히, 3명 피라미드."""
+    lx, ly, lw = leader
+    lcx = lx + lw / 2.0 + shift
+    base = ly + head - foot + drop
+
+    def row(items, y):
+        total = sum(w for _x, _y, w in items) + gap * max(0, len(items) - 1)
+        x = lcx - total / 2.0
+        targets = []
+        for _old_x, _old_y, w in items:
+            targets.append((x, y, 1, "idle"))
+            x += w + gap
+        return targets
+
+    bottom = companions[:2] if len(companions) == 3 else companions
+    out = row(bottom, base)
+    if len(bottom) == 2:
+        out[0] = (out[0][0] + inset, *out[0][1:])
+        out[1] = (out[1][0] - inset, *out[1][1:])
+    if len(companions) == 3:
+        out += row(companions[2:], base - creature_h)
+    return out

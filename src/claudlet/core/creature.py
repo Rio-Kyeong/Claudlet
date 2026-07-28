@@ -30,7 +30,7 @@ _WALKERS = ("walk", "autopilot", "auto_web", "auto_search")
 STATES = ("idle", "walk", "work_computer", "work_search", "work_web",
           "work_agent", "work_skill", "autopilot") + AUTO_VARIANTS + (
           "thinking", "attention", "asking",
-          "error", "celebrate", "sleeping", "held", "falling",
+          "error", "angry", "celebrate", "sleeping", "held", "falling",
           "jump", "wave", "sing", "juggle", "float", "climbdown", "strain",
           "leap", "observe", "tic", "settle", "doze")
 
@@ -45,6 +45,7 @@ SPEECH = {                      # Korean (default; also drives the mockup sheet)
     "asking": "응?",
     "celebrate": "다 됐다!",
     "error": "으악!",
+    "angry": "그만 눌러!",
 }
 SPEECH_EN = {
     "thinking": "hmm…",
@@ -52,6 +53,7 @@ SPEECH_EN = {
     "asking": "yeah?",
     "celebrate": "done!",
     "error": "argh!",
+    "angry": "stop poking!",
 }
 LANG = "ko"                     # set by pet.py via set_lang(); "ko" | "en"
 
@@ -117,7 +119,8 @@ def _sin(frame, period, amp, phase=0.0):
 
 
 def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
-                  energy=1.0, palette=None, happy=False, pocket=False):
+                  energy=1.0, palette=None, happy=False, pocket=False,
+                  gaze=(0.0, 0.0)):
     """Draw the creature. All coordinates are in art pixels * u.
 
     visor="up" pushes a VR-headset up onto the head (auto mode while not actively
@@ -221,6 +224,10 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         bob = 1.5
         baseline_lift = -1.0
         eyes = "x"
+        prop = "speech"
+    elif state == "angry":
+        tilt = _sin(frame, 4, 5.0)
+        eyes = "squint"
         prop = "speech"
     elif state == "celebrate":
         t = (frame % 18) / 18.0
@@ -428,14 +435,17 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
     e1, e2 = 5.8, 13.8   # eye columns — wide-set (~2.5x the previous spacing)
     er = 7.4
     def eye(col, kind):
+        gazeable = kind in ("open", "focus", "up", "wide")
+        col += gaze[0] * facing * 0.65 if gazeable else 0.0
+        row = er + (gaze[1] * 0.45 if gazeable else 0.0)
         if kind == "open":
-            px(col, er, 1.4, 1.8, EYE)
+            px(col, row, 1.4, 1.8, EYE)
         elif kind == "blink":
-            px(col, er + 1.0, 1.4, 0.6, EYE)
+            px(col, row + 1.0, 1.4, 0.6, EYE)
         elif kind == "sleep":
-            px(col - 0.6, er + 1.0, 2.6, 0.6, EYE)   # wider closed eyes when sleeping
+            px(col - 0.6, row + 1.0, 2.6, 0.6, EYE)   # wider closed eyes when sleeping
         elif kind == "focus":
-            px(col, er + 0.6, 1.6, 0.9, EYE)
+            px(col, row + 0.6, 1.6, 0.9, EYE)
         elif kind == "squint":
             # scrunched-shut straining eyes "><": each eye is two short strokes
             # meeting at a point on its INNER side, so the vertices point toward
@@ -446,17 +456,17 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
             c = col + (0.5 if left else -0.5)         # shift ½ cell inward (nose)
             vtx = c + 0.9 if left else c              # inner vertex block x
             outr = c if left else c + 0.9             # outer stroke ends x
-            px(outr, er + 0.3, 1.1, 0.6, EYE)         # upper stroke (outer end)
-            px(vtx, er + 0.85, 1.1, 0.6, EYE)         # inner vertex (mid)
-            px(outr, er + 1.4, 1.1, 0.6, EYE)         # lower stroke (outer end)
+            px(outr, row + 0.3, 1.1, 0.6, EYE)         # upper stroke (outer end)
+            px(vtx, row + 0.85, 1.1, 0.6, EYE)         # inner vertex (mid)
+            px(outr, row + 1.4, 1.1, 0.6, EYE)         # lower stroke (outer end)
         elif kind == "up":
-            px(col, er - 0.4, 1.4, 1.6, EYE)
+            px(col, row - 0.4, 1.4, 1.6, EYE)
         elif kind == "wide":
-            px(col - 0.2, er - 0.4, 1.9, 2.4, EYE)
+            px(col - 0.2, row - 0.4, 1.9, 2.4, EYE)
         elif kind == "x":
-            px(col, er, 1.7, 0.5, EYE); px(col + 0.6, er - 0.6, 0.5, 1.7, EYE)
+            px(col, row, 1.7, 0.5, EYE); px(col + 0.6, row - 0.6, 0.5, 1.7, EYE)
         elif kind == "happy":
-            px(col, er + 0.8, 0.6, 0.6, EYE); px(col + 0.55, er + 0.3, 0.6, 0.6, EYE); px(col + 1.1, er + 0.8, 0.6, 0.6, EYE)
+            px(col, row + 0.8, 0.6, 0.6, EYE); px(col + 0.55, row + 0.3, 0.6, 0.6, EYE); px(col + 1.1, row + 0.8, 0.6, 0.6, EYE)
     def headset(top, glint):
         # the SAME VR headset, drawn with its housing top at row `top`. Worn over
         # the eyes when down; the identical shape raised onto the head when up.

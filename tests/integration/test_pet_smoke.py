@@ -253,49 +253,53 @@ def test_companion_falls_onto_a_window_below(monkeypatch):
         p._cleanup()
 
 
-def test_companion_gathers_beside_held_pet(monkeypatch):
-    # lifting the pet makes the companion hurry to the cursor and dangle beside
-    # it, so a subsequent throw launches the two side by side.
+def test_companions_snap_to_frontmost_swaying_held_chain(monkeypatch):
     p = P.Pet(session_id="cmpheld")
     try:
-        monkeypatch.setattr(p.engine, "agents_active", lambda: 1)
+        monkeypatch.setattr(p.engine, "agents_active", lambda: 3)
         p._sync_companion()
-        c = p._companion
-        c.x, c.y = p.x - 600, p.y + 300          # far away on the ground
+        for c in p._companions:
+            c.apply_mask(P.QRegion())             # previously fully covered
+        p._geom_active = True
         p.mode = "held"
-        d0 = abs((c.x + c.w / 2) - (p.x + p.w / 2)) + abs(c.y - p.y)
-        for _ in range(200):
-            p._sync_companion()
-        d1 = abs((c.x + c.w / 2) - (p.x + p.w / 2)) + abs(c.y - p.y)
-        assert d1 < d0                            # closed in on the held pet
-        assert c._state == "held"                 # dangling beside it
+        p._sync_companion()                       # establish the rope anchor
+        p.x -= 30.0                               # pet moves left; chain trails right
+        p._sync_companion()
+        assert all(c._state == "held" and c.isVisible() for c in p._companions)
+        assert p._companions[0].y < p._companions[1].y < p._companions[2].y
+        assert p._companions[0].x < p._companions[1].x < p._companions[2].x
+        segments = []
+        leader = [p.x + p.w / 2.0, p.y + p.h / 2.0]
+        for point in p._held_chain:
+            segments.append((point[0] - leader[0], point[1] - leader[1]))
+            leader = point
+        assert abs(segments[0][0] * segments[1][1]
+                   - segments[0][1] * segments[1][0]) > 0.1  # articulated, not a rod
     finally:
         p._cleanup()
 
 
-def test_companion_follows_thrown_pet(monkeypatch):
-    # a thrown pet is no longer a special fling for the companion: it is NOT
-    # independently launched with the pet's velocity -- it just keeps chasing
-    # the pet's (now moving) position through the normal pipeline and closes in
-    # once the pet settles.
+def test_companions_replay_thrown_trajectory(monkeypatch):
     p = P.Pet(session_id="cmpfling")
     try:
-        monkeypatch.setattr(p.engine, "agents_active", lambda: 1)
+        monkeypatch.setattr(p.engine, "agents_active", lambda: 2)
         monkeypatch.setattr(p.engine, "agent_state", lambda: "idle")
         p._wins = []
-        p.x = float(p.screen_rect.left() + 400)
-        p.y = float(p.floor_y)
-        p._sync_companion()
-        c = p._companion
-        c.x, c.y = p.x - 300.0, float(p.floor_y)
         p.mode = "thrown"
-        p.vx, p.vy = 12.0, -10.0
-        p._sync_companion()
-        assert not (c.vx == 12.0 and c.vy == -10.0)   # NOT a fling copy of the pet
-        for _ in range(400):
-            p._tick()                                 # pet physics + companion follow
-        d = abs((c.x + c.w / 2) - (p.x + p.w / 2))
-        assert d < 150                                # tracked the pet to where it landed
+        points = [(100.0 + i * 20.0, 300.0 - i * 10.0) for i in range(7)]
+        for p.x, p.y in points:
+            p._render_state = "falling"
+            p._sync_companion()
+        c1, c2 = p._companions
+        assert c1.x + c1.w / 2.0 == points[3][0] + p.w / 2.0
+        assert c2.x + c2.w / 2.0 == points[0][0] + p.w / 2.0
+        p.mode = "roam"
+        for _ in range(2 * P.COMPANION_THROW_GAP):
+            p._sync_companion()
+        end_x, end_y = points[-1]
+        assert all(c.x + c.w / 2.0 == end_x + p.w / 2.0
+                   and c.y + c.h / 2.0 == end_y + p.h / 2.0
+                   for c in p._companions)
     finally:
         p._cleanup()
 
@@ -590,6 +594,36 @@ def test_visibility_perched_on_top_not_clipped_by_its_window():
         p._update_visibility()
         snap = p.snapshot()
         assert snap["masked"] is True or snap["hidden"] is True
+    finally:
+        p._cleanup()
+
+
+def test_companion_uses_pets_z_plane(monkeypatch):
+    from claudlet.platform import geom as W
+    p = P.Pet(session_id="hvc")
+    try:
+        monkeypatch.setattr(p.engine, "agents_active", lambda: 1)
+        p._geom_active = True
+        base = W.Win("base", 0, 500, 800, 400, "editor", 1)
+        cover = W.Win("cover", 0, 300, 800, 400, "code", 2)
+        p._wins = [base, cover]
+        p._contain = base
+        p.x, p.y = 100.0, 450.0
+        p._sync_companion()
+        c = p._companion
+        c._contain = None
+        c.x = 100.0
+        c.y = base.y - P.FOOT_Y * (P.COMPANION_U / float(P.U))
+        p._occlude_companion(c)
+        assert c._hidden_for_win is True and not c.isVisible()
+        p._wins = [base]
+        p._occlude_companion(c)
+        assert c._hidden_for_win is False and c.isVisible()
+        p._hidden_for_win = True
+        c._contain = None
+        p._wins = []
+        p._occlude_companion(c)
+        assert c._hidden_for_win is True and not c.isVisible()
     finally:
         p._cleanup()
 
@@ -1140,6 +1174,20 @@ def test_social_act_starts_with_companion_and_expires(pet, monkeypatch):
     pet._debug_companions = 0
 
 
+def test_social_stack_eases_to_targets(pet):
+    pet._debug_companions = 3
+    pet._sync_companion()
+    pet._social_act = "stack"
+    starts = [(c.x, c.y) for c in pet._companions]
+    pet._social_targets = [(x + 100.0, y - 100.0, 1, "idle")
+                           for x, y in starts]
+    pet._drive_social()
+    step = P.COMPANION_SPEED * 2.5
+    assert all(c.x == x + step and c.y == y - step
+               for c, (x, y) in zip(pet._companions, starts))
+    pet._debug_companions = 0
+
+
 def test_no_social_without_companion(pet, monkeypatch):
     from claudlet.core import social
     pet.claude_state = "idle"
@@ -1170,6 +1218,16 @@ def test_petting_works_even_when_sleeping(pet):
     assert pet.snapshot()["petted"] is True
 
 
+def test_repeated_clicks_trigger_angry_motion(pet):
+    base = time.monotonic()
+    for i in range(P.ANGER_CLICKS - 1):
+        assert pet._note_click(base + i * 0.2) is False
+    assert pet.snapshot()["motion"] is None
+    assert pet._note_click(base + (P.ANGER_CLICKS - 1) * 0.2) is True
+    pet._tick()
+    assert pet.snapshot()["render"] == "angry"
+
+
 def test_pocket_stays_put_ignoring_follow():
     # 주머니 빼꼼(float 대체)은 제자리 고정 — follow가 켜져 있어도 커서를 안 쫓는다.
     p = P.Pet(session_id="m11")
@@ -1185,6 +1243,62 @@ def test_pocket_stays_put_ignoring_follow():
             p._tick()
         assert (p.x, p.y) == start          # 안 움직임
         assert p.snapshot()["floating"] is True
+    finally:
+        p._cleanup()
+
+
+def test_cursor_gaze_clamps_to_pet_bounds():
+    assert P.cursor_gaze((0, 100), (100, 100), (50, 50)) == (-1.0, 0.0)
+    assert P.cursor_gaze((200, 200), (100, 100), (50, 50)) == (1.0, 1.0)
+
+
+def test_pocket_click_wakes_then_returns_to_sleep(pet):
+    base = time.monotonic()
+    pet._floating = True
+    assert pet._pocket_render_state("sleeping", base) == "sleeping"
+    pet._note_click(base)
+    assert pet._pocket_render_state("sleeping", base) == "idle"
+    assert pet._pocket_render_state("sleeping", base + P.POCKET_WAKE_SEC) == "sleeping"
+    assert pet._pocket_render_state("work_computer", base) == "work_computer"
+
+
+def test_companions_share_pocket_wake_and_follow_gaze(monkeypatch):
+    p = P.Pet(session_id="m13")
+    try:
+        monkeypatch.setattr(p.engine, "agents_active", lambda: 1)
+        p._cursor = (int(p.x + p.w * 3), int(p.y))
+        p._floating = True
+        p.claude_state = "sleeping"
+        p._sync_companion()
+        c = p._companion
+        assert c._state == "sleeping"
+        assert c.x == p.x + (p.w - c.w) / 2.0 + 0.5
+        p._pocket_awake_until = time.monotonic() + 10.0
+        p._sync_companion()
+        assert c._state == "idle" and c.gaze != (0.0, 0.0)
+        p._floating = False
+        p._follow = True
+        p._sync_companion()
+        assert c.gaze != (0.0, 0.0)
+    finally:
+        p._cleanup()
+
+
+def test_pocket_drop_over_window_stays_frontmost():
+    from claudlet.platform import geom as W
+    p = P.Pet(session_id="m12")
+    try:
+        win = W.Win("w1", 0, 0, 1000, 1000, "code")
+        p._wins = [win]
+        p.x, p.y = 100.0, 100.0
+        p._moved = True
+        p._floating = True
+        p.mouseReleaseEvent(_LeftRelease())
+        assert p.snapshot()["contained"] is None
+        assert p.snapshot()["floating"] is True
+        p._geom_active = True
+        p._update_visibility()
+        assert p.snapshot()["masked"] is False
     finally:
         p._cleanup()
 

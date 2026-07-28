@@ -15,14 +15,12 @@ def test_pick_returns_an_act():
     assert social.pick(0.5, 2) in social.ACTS
 
 
-def test_arrange_stack_piles_upward():
+def test_arrange_stack_reuses_pyramid_layout():
     leader = (100.0, 200.0, 40.0)
     comps = [(0.0, 200.0, 20.0), (0.0, 200.0, 20.0)]
     tgts = social.arrange("stack", leader, comps, creature_h=30.0, foot=44.0, head=25.0)
-    base = 200.0 + 25.0 - 44.0                            # 발이 리더 머리에 닿는 창-top
-    assert tgts[0][0] == 100.0 + 40.0 / 2 - 20.0 / 2      # x 리더 중심 정렬
-    assert tgts[0][1] == base                             # 1층
-    assert tgts[1][1] == base - 30.0                      # 2층(몸통 높이만큼 위)
+    assert tgts == social.arrange_pocket(
+        leader, comps, creature_h=30.0, foot=44.0, head=25.0)
 
 
 def test_arrange_lineup_spaces_horizontally():
@@ -49,3 +47,16 @@ def test_arrange_highfive_moves_nearest_only():
     assert tgts[0][3] == "wave"                # 가까운 놈이 하이파이브
     assert tgts[1][3] == "idle"                # 먼 놈은 대기
     assert tgts[1][0] == 300.0                 # 먼 놈 이동 없음
+
+
+def test_arrange_pocket_centres_pairs_and_builds_pyramid():
+    leader = (100.0, 200.0, 100.0)
+    comp = (0.0, 0.0, 20.0)
+    one = social.arrange_pocket(leader, [comp], 30.0, 40.0, 20.0)
+    two = social.arrange_pocket(leader, [comp] * 2, 30.0, 40.0, 20.0)
+    three = social.arrange_pocket(leader, [comp] * 3, 30.0, 40.0, 20.0)
+    assert [t[0] for t in one] == [140.5]                 # 중앙에서 우측 0.5px
+    assert [t[0] for t in two] == [136.5, 144.5]          # 안쪽으로 6px
+    assert [t[0] for t in three] == [136.5, 144.5, 140.5] # 위층은 중앙
+    assert three[2][1] == three[0][1] - 30.0              # 피라미드 꼭대기
+    assert one[0][1] == 192.0                              # 전체를 아래로 12px

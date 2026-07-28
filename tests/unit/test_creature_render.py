@@ -9,7 +9,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 
 EXPECTED = {"thinking", "work_computer", "work_search", "work_web",
             "work_agent", "work_skill", "attention", "idle",
-            "celebrate", "sleeping", "error", "walk", "held", "falling"}
+            "celebrate", "sleeping", "error", "angry", "walk", "held", "falling"}
 
 
 def test_states_present():
@@ -99,6 +99,18 @@ def test_energy_defaults_to_full_and_is_keyword():
     import inspect
     sig = inspect.signature(C.draw_creature)
     assert sig.parameters["energy"].default == 1.0
+
+
+def test_gaze_changes_open_eyes():
+    def render(gaze):
+        img = QImage(C.GRID_W * 6, C.GRID_H * 6, QImage.Format.Format_ARGB32)
+        img.fill(0)
+        p = QPainter(img)
+        C.draw_creature(p, 0, 0, 6, "idle", 10, gaze=gaze)
+        p.end()
+        return bytes(img.constBits().asarray(img.sizeInBytes()))
+
+    assert render((-1.0, -1.0)) != render((1.0, 1.0))
 
 
 def test_energy_droop_changes_render_and_full_matches_default():

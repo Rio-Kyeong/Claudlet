@@ -75,6 +75,9 @@ COMPANION_REUNITE_TICKS = 90            # ticks a separated companion keeps tryi
 COMPANION_MAX = 3                       # companion cap: one per running agent, up to
                                         #   this many trailing in a duckling chain
 COMPANION_BYE_DUR = 1.6                 # departing celebrate ("다 됐다!") before closing
+COMPANION_THROW_GAP = 3                 # thrown trajectory delay, ticks per follower
+COMPANION_HELD_GRAVITY = 1.0             # px/tick²; dangling-chain weight
+COMPANION_HELD_DAMPING = 0.86            # lower = calmer, faster-settling swing
 FPS = 20
 
 # short label per state (tray tooltip), per language
@@ -135,6 +138,10 @@ FOOT_Y = 89
 CROWN_ROW, FOOT_ROW = 3.0, 15.8
 
 PET_REACT_SEC = 1.5                     # 쓰다듬기 하트 반응 지속(초)
+ANGER_CLICKS = 4                        # 이 횟수만큼 빠르게 누르면 화냄
+ANGER_CLICK_WINDOW = 1.2                # 연속 클릭 판정 시간(초)
+ANGER_DUR = 2.0                         # 화난 표정 지속(초)
+POCKET_WAKE_SEC = 8.0                   # 클릭 후 커서를 바라보는 시간
 
 # follow-mode navigation thresholds (jump reach, alignment, strain margins)
 # live in core/follow_nav.py -- the pure planner the follow branch delegates to.
@@ -181,6 +188,12 @@ def point_in_notch(px, py, notch):
     return x <= px < x + w and y <= py < y + h
 
 
+def cursor_gaze(cursor, center, half_size):
+    """Cursor direction from the pet centre, clamped to the eye's travel range."""
+    return tuple(max(-1.0, min(1.0, (c - mid) / max(1.0, half)))
+                 for c, mid, half in zip(cursor, center, half_size))
+
+
 def _same_win(a, b):
     """Two window handles refer to the same window (by id), or both are None."""
     if a is None or b is None:
@@ -215,8 +228,10 @@ class Companion(QWidget):
         self.facing = -1
         self._moving = False           # follow hysteresis: are we currently chasing?
         self._state = "idle"           # walk while chasing, idle when settled
+        self.gaze = (0.0, 0.0)
         self._masked = False           # occlusion mask state (same trick as the pet)
         self._last_mask = None
+        self._hidden_for_win = False
         self.vx = 0.0                  # own physics while airborne (see fly)
         self.vy = 0.0
         self._air = False              # True while flying/bouncing on its own
@@ -237,18 +252,21 @@ class Companion(QWidget):
         self.update()
 
     def apply_mask(self, region):
-        """Mask-only visibility, mirroring Pet._apply_mask: full region drops the
-        clip; an EMPTY region must become a 1px off-widget mask because Qt treats
-        setMask(<empty>) as 'no mask' (would show everything)."""
+        """Clip partial coverage; hide the independent window on full coverage."""
         full = QRegion(QRect(0, 0, self.w, self.h))
+        if region.isEmpty():
+            self._hidden_for_win = True
+            self.hide()
+            return
+        self._hidden_for_win = False
+        if not self.isVisible():
+            self.show()
         if region == full:
             if self._masked:
                 self.clearMask()
                 self._masked = False
                 self._last_mask = None
             return
-        if region.isEmpty():
-            region = QRegion(QRect(-1, -1, 1, 1))
         if not self._masked or region != self._last_mask:
             self.setMask(region)
             self._masked = True
@@ -287,23 +305,6 @@ class Companion(QWidget):
         self.update()      # repaint EVERY tick — without this the walk cycle/bob
                            # never animates (move() alone doesn't trigger a paint)
 
-    def hover_to(self, tx, ty, ease=0.22):
-        """While the pet is HELD: hurry to the cursor and get 'picked up' too —
-        ease toward a spot beside the held pet (both axes), dangling once there.
-        So a throw launches the two from side by side, not screen-widths apart."""
-        dx, dy = tx - self.x, ty - self.y
-        if abs(dx) > 0.5:
-            self.facing = 1 if dx > 0 else -1
-        self.x += dx * ease
-        self.y += dy * ease
-        near = abs(dx) < 8 and abs(dy) < 8
-        self._state = "held" if near else "walk"    # dangle once it arrives
-        self._moving = True
-        self._air = False                           # a grab cancels any flight
-        self.frame = (self.frame + 1) % 100000
-        self.move(int(self.x), int(self.y))
-        self.update()
-
     def fly(self, left, right, top, floor):
         """One tick of a deliberate follow-arc -- a jump toward the leader, or a
         fall onto a surface below -- run through the pet's own physics engine
@@ -337,7 +338,7 @@ class Companion(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         C.draw_creature(p, PAD_X * COMPANION_U, PAD_Y * COMPANION_U,
                         COMPANION_U, self._state, self.frame, facing=self.facing,
-                        cap=self.hat)
+                        cap=self.hat, gaze=self.gaze)
         p.end()
 
 
@@ -507,6 +508,11 @@ class Pet(QWidget):
         self._host_wid = None                # internalId of our host window (focus)
         self._companions = []                # agent followers, one per running agent
         self._departing = []                 # finished agents' companions waving goodbye
+        self._throw_trail = []               # main-pet snapshots replayed by companions
+        self._throw_playback = 0
+        self._throw_recording = False
+        self._held_chain = []
+        self._held_chain_prev = []
         self._debug_companions = 0           # test override: force >=N companions
                                              # (right-click menu), atop real agents
         # 소셜: idle+컴패니언일 때 랜덤 합동동작(마주보기/줄서기/탑쌓기/하이파이브)
@@ -536,6 +542,7 @@ class Pet(QWidget):
         # hovers, while its normal animation keeps playing. Cleared by `stop`.
         self._floating = False
         self._in_notch = False        # 노치에 보관 중(주머니의 노치 재해석)
+        self._pocket_awake_until = 0.0
         # 쓰다듬기: 버튼 없는 호버 왕복 감지 -> 하트+행복 표정 반응
         self._hover_samples = []         # [(t, cursor_x)] 최근 호버
         self._pet_react_until = 0.0      # 하트 반응 종료 시각(monotonic)
@@ -548,7 +555,7 @@ class Pet(QWidget):
         # only updates while the cursor is over our own (XWayland) surface, so on
         # Wayland the compositor is the only reliable source off-surface.
         self._cursor = None
-        self._cursor_plugin = None       # KWin cursor-feed script, loaded on follow
+        self._cursor_plugin = None       # KWin cursor feed, used by follow/pocket
         self._activate_plugin = None     # one-shot click-to-focus KWin script
 
         # drag tracking
@@ -556,6 +563,7 @@ class Pet(QWidget):
         self._press_winpos = None
         self._moved = False
         self._vel_samples = []
+        self._click_times = []
 
         self._init_socket()
         self._init_tray()
@@ -878,7 +886,7 @@ class Pet(QWidget):
 
     def _social_eligible(self):
         return (self.claude_state in ("idle", "sleeping")
-                and self.mode == "roam" and not self.dnd
+                and self.mode == "roam" and not self._floating and not self.dnd
                 and len(self._companions) >= 1)
 
     def _social_start(self, now):
@@ -908,7 +916,7 @@ class Pet(QWidget):
         # act 동안 각 컴패니언을 arrange 타겟으로 직접 ease(팔로우/물리 개입 차단).
         # x는 항상, y는 stack만(지상 act는 c.y 유지). 도착하면 facing 고정.
         stack = self._social_act == "stack"
-        spd = COMPANION_SPEED * (2.5 if stack else 1.0)   # 탑은 층까지 닿게 빠르게
+        spd = COMPANION_SPEED * (2.5 if stack else 1.0)
         for c, (tx, ty, facing, pose) in zip(self._companions, self._social_targets):
             c._contain = None
             c._air = False
@@ -916,15 +924,13 @@ class Pet(QWidget):
             if stack:
                 c.y += max(-spd, min(spd, ty - c.y))
             if abs(tx - c.x) <= spd:
-                c.facing = facing            # 도착: act 방향으로 고정
+                c.facing = facing
             elif tx != c.x:
                 c.facing = 1 if tx > c.x else -1
             c._state = pose
             c.frame = (c.frame + 1) % 100000
             c.move(int(c.x), int(c.y))
             self._occlude_companion(c)
-            if not c.isVisible():
-                c.show()
             c.update()
 
     def _sync_companion(self):
@@ -949,6 +955,8 @@ class Pet(QWidget):
             else:
                 c.depart_tick()
         if n <= 0:
+            self._throw_trail = []
+            self._throw_recording = False
             return
         while len(self._companions) < n:             # a new agent started
             c = Companion()
@@ -969,19 +977,71 @@ class Pet(QWidget):
             c.y = float(prev.y)
             self._companions.append(c)
 
+        cursor = self._cursor_pos() if self._floating or self._follow else None
+        for c in self._companions:
+            c.gaze = cursor_gaze(
+                cursor, (c.x + c.w / 2, c.y + c.h / 2), (c.w / 2, c.h / 2)
+            ) if cursor is not None else (0.0, 0.0)
+
         if self.mode == "held":
-            # the pet is lifted: the whole chain scurries to the cursor and
-            # dangles UNDER the held pet. A release/throw just drops them back
-            # into the follow pipeline (they fall/navigate to where it lands).
+            self._throw_trail = []
+            self._throw_recording = False
+            anchor_x = self.x + self.w / 2.0
+            anchor_y = self.y + self.h / 2.0
+            links = [(self.h + c.h) / 2.0 + 2 if i == 0 else c.h * 0.75
+                     for i, c in enumerate(self._companions)]
+            if len(self._held_chain) != len(self._companions):
+                y = anchor_y
+                self._held_chain = []
+                for link in links:
+                    y += link
+                    self._held_chain.append([anchor_x, y])
+                self._held_chain_prev = [p[:] for p in self._held_chain]
+            else:
+                for i, ((x, y), (px, py)) in enumerate(zip(
+                        self._held_chain, self._held_chain_prev)):
+                    self._held_chain_prev[i] = [x, y]
+                    self._held_chain[i] = [
+                        x + (x - px) * COMPANION_HELD_DAMPING,
+                        y + (y - py) * COMPANION_HELD_DAMPING
+                        + COMPANION_HELD_GRAVITY,
+                    ]
+                for _ in range(8):
+                    for i, link in enumerate(links):
+                        leader = ([anchor_x, anchor_y] if i == 0
+                                  else self._held_chain[i - 1])
+                        point = self._held_chain[i]
+                        dx, dy = point[0] - leader[0], point[1] - leader[1]
+                        distance = math.hypot(dx, dy) or 1.0
+                        correction = (distance - link) / distance
+                        weight = 1.0 if i == 0 else 0.5
+                        point[0] -= dx * correction * weight
+                        point[1] -= dy * correction * weight
+                        if i:
+                            leader[0] += dx * correction * 0.5
+                            leader[1] += dy * correction * 0.5
             for i, c in enumerate(self._companions):
-                c.hover_to(self.x + (self.w - c.w) / 2.0,
-                           self.y + self.h + 2 + i * int(c.h * 0.75))
+                c.x = self._held_chain[i][0] - c.w / 2.0
+                c.y = self._held_chain[i][1] - c.h / 2.0
+                c.facing = self.facing
+                c._state = "held"
                 c._contain = None            # re-navigate from scratch on release
                 c._air = False
                 c._follow_jump = False
+                c._moving = False
+                c.frame = (c.frame + 1) % 100000
+                c.move(int(c.x), int(c.y))
                 self._occlude_companion(c)
-                if not c.isVisible():
-                    c.show()
+                c.update()
+            return
+
+        if self._floating:
+            self._throw_trail = []
+            self._throw_recording = False
+            self._drive_pocket_stack()
+            return
+
+        if self._drive_throw_trail():
             return
 
         # 소셜 act 진행 중: 일반 follow 대신 합동동작 배치로 몰고 복귀.
@@ -989,13 +1049,12 @@ class Pet(QWidget):
             self._drive_social()
             return
 
-        # Every other mode (roam AND thrown) drives each companion through the
-        # SAME pure nav+physics core the pet uses: aim at the LEADER (the pet
+        # Normal follow drives each companion through the same nav+physics core:
+        # aim at the LEADER (the pet
         # for #1, the companion ahead for the rest — a duckling chain) and let
         # follow_nav.plan_move + physics.advance walk / jump between windows /
-        # drop IN to sit with it / climb down / fall. This is the "share the
-        # pet's physics" requirement: a thrown pet is just a moving target the
-        # companion chases, not a special fling.
+        # drop IN to sit with it / climb down / fall. Thrown motion returned
+        # above after replaying the main pet's recorded trajectory.
         ratio = COMPANION_U / float(U)
         scr = self.screen_rect
         leader = self
@@ -1060,9 +1119,69 @@ class Pet(QWidget):
                     self._drive_companion(c, intent, left, right, floor,
                                           lead_feet, foot, lead_contain)
             self._occlude_companion(c)
-            if not c.isVisible():
-                c.show()
             leader = c
+
+    def _drive_throw_trail(self):
+        """Replay the main pet's real thrown path with a short follower delay."""
+        if self.mode == "thrown":
+            if not self._throw_recording:
+                self._throw_trail = []
+            self._throw_recording = True
+            self._throw_trail.append((
+                self.x, self.y, self._contain,
+                getattr(self, "_render_state", "falling")))
+            self._throw_playback = len(self._throw_trail) - 1
+        elif self._throw_recording:
+            self._throw_recording = False
+            self._throw_playback = len(self._throw_trail)
+        elif self._throw_trail:
+            self._throw_playback += 1
+        else:
+            return False
+
+        last = len(self._throw_trail) - 1
+        for i, c in enumerate(self._companions):
+            idx = min(last, max(
+                0, self._throw_playback - (i + 1) * COMPANION_THROW_GAP))
+            x, y, contain, pose = self._throw_trail[idx]
+            c.x = x + (self.w - c.w) / 2.0
+            c.y = y + (self.h - c.h) / 2.0
+            c._contain = contain
+            c._air = False
+            c._follow_jump = False
+            c._moving = False
+            c._state = pose if pose in C.STATES else "falling"
+            c.frame = (c.frame + 1) % 100000
+            c.move(int(c.x), int(c.y))
+            self._occlude_companion(c)
+            c.update()
+
+        if (self.mode != "thrown"
+                and self._throw_playback >= last
+                + len(self._companions) * COMPANION_THROW_GAP):
+            self._throw_trail = []
+        return True
+
+    def _drive_pocket_stack(self):
+        body_h = (FOOT_ROW - CROWN_ROW) * COMPANION_U
+        foot = (PAD_Y + FOOT_ROW) * COMPANION_U
+        head = (PAD_Y + CROWN_ROW) * U
+        targets = social.arrange_pocket(
+            (self.x, self.y, float(self.w)),
+            [(c.x, c.y, float(c.w)) for c in self._companions],
+            creature_h=body_h, foot=foot, head=head)
+        rest = self._pocket_render_state(self.claude_state, time.monotonic())
+        for c, (tx, ty, facing, _pose) in zip(self._companions, targets):
+            c._contain = None
+            c._air = False
+            c._follow_jump = False
+            c.x, c.y = tx, ty
+            c.facing = facing
+            c._state = rest
+            c.frame = (c.frame + 1) % 100000
+            c.move(int(c.x), int(c.y))
+            self._occlude_companion(c)
+            c.update()
 
     def _companion_nav_box(self, c):
         """A follow_nav.Box for the companion whose feet lines (screen floor,
@@ -1204,16 +1323,21 @@ class Pet(QWidget):
         c.update()
 
     def _occlude_companion(self, c):
-        """Clip the companion the way the pet clips itself: when it lives INSIDE
-        a window, windows stacked above THAT window (its own, which may differ
-        from the pet's) cover it too. On the desktop (or without a geom feed) it
-        stays fully visible."""
-        if not getattr(self, "_geom_active", False) or c._contain is None:
+        """Keep every companion on the pet's z-plane and clip it there."""
+        if (not getattr(self, "_geom_active", False)
+                or self._floating or self.mode == "held"):
             c.apply_mask(QRegion(QRect(0, 0, c.w, c.h)))
             return
-        cur = next((w for w in self._wins if w.wid == c._contain.wid), None)
-        if cur is None:                        # ridden window minimized/closed
+        if self._hidden_for_win:
             c.apply_mask(QRegion())
+            return
+        if self._contain is not None:
+            cur = next((w for w in self._wins if w.wid == self._contain.wid), None)
+        else:
+            cur = geom.window_under_feet(
+                self.x + self.w / 2.0, self.y + FOOT_Y, self._wins)
+        if cur is None:                        # pet is on the bare desktop
+            c.apply_mask(QRegion(QRect(0, 0, c.w, c.h)))
             return
         try:
             i = self._wins.index(cur)
@@ -1587,7 +1711,7 @@ class Pet(QWidget):
 
     def _start_cursor_feed(self):
         """Load a KWin script that pushes the global cursor position on move.
-        Loaded ONLY while follow is on (idle cost is zero otherwise)."""
+        Loaded only while follow or pocket mode needs it."""
         svc = getattr(self, "_dbus_name", None)
         if not svc:
             return                              # no DBus channel -> QCursor fallback
@@ -1684,7 +1808,8 @@ class Pet(QWidget):
         partially covered -> shown only over the uncovered sliver; on the bare
         desktop -> fully visible (a maximized window in front never hides a pet
         wandering the wallpaper). No-op without an active geometry feed."""
-        if not getattr(self, "_geom_active", False) or self.mode == "held":
+        if (not getattr(self, "_geom_active", False)
+                or self.mode == "held" or self._floating):
             self._show_full()
             return
         if self._contain is not None:
@@ -1835,13 +1960,20 @@ class Pet(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         state = getattr(self, "_render_state", self.claude_state)
+        now = time.monotonic()
+        pocket = self._floating and self.mode not in ("held", "thrown")
+        if pocket:
+            state = self._pocket_render_state(state, now)
         # in an auto mode the visor stays on: worn by the auto_* states,
         # pushed up onto the head for every other state.
         vis = "up" if getattr(self, "_auto", False) and \
             state not in AUTO_STATES else None
-        now = time.monotonic()
         petted = now < self._pet_react_until
-        pocket = self._floating and self.mode not in ("held", "thrown")
+        gaze = cursor_gaze(
+            self._cursor_pos(),
+            (self.x + self.w / 2, self.y + self.h / 2),
+            (self.w / 2, self.h / 2),
+        ) if pocket or self._follow else (0.0, 0.0)
         # facing handled inside draw_creature (body mirrors, text upright)
         if getattr(self, "_in_notch", False):
             u = NOTCH_U
@@ -1852,7 +1984,7 @@ class Pet(QWidget):
             ox, oy = PAD_X * U, PAD_Y * U
         C.draw_creature(p, ox, oy, u, state, self.frame,
                         facing=self.facing, visor=vis, energy=self.idle_energy.value,
-                        palette=self._palette, happy=petted, pocket=pocket)
+                        palette=self._palette, happy=petted, pocket=pocket, gaze=gaze)
         if petted:
             self._draw_hearts(p, 1.0 - (self._pet_react_until - now) / PET_REACT_SEC)
         p.end()
@@ -1900,6 +2032,8 @@ class Pet(QWidget):
             self._moved = False
             self._vel_samples = [(time.monotonic(), self._press_global)]
             self.mode = "held"
+            self._held_chain = []
+            self._held_chain_prev = []
             self._follow_jump = False      # a grab cancels any follow-jump
         elif e.button() == Qt.MouseButton.RightButton:
             self._menu(e.globalPosition().toPoint())
@@ -1925,11 +2059,12 @@ class Pet(QWidget):
         if e.button() != Qt.MouseButton.LeftButton:
             return
         if not self._moved:
+            self._note_click(time.monotonic())
             self._activate_claude()
             self.mode = "roam"
         elif self._floating:
             # floating: stay put wherever you drop it — no fall, no perch, no
-            # snap-back. `stop` is what restores gravity.
+            # snap-back. Fixed mode stays above windows instead of entering one.
             self._contain = None
             self.vx = self.vy = 0.0
             self.mode = "roam"
@@ -1964,6 +2099,18 @@ class Pet(QWidget):
                 self.vx, self.vy = vx, vy
                 self.mode = "thrown"
         self._press_global = None
+
+    def _note_click(self, now):
+        if self._floating:
+            self._pocket_awake_until = now + POCKET_WAKE_SEC
+        self._click_times = [t for t in self._click_times
+                             if now - t <= ANGER_CLICK_WINDOW]
+        self._click_times.append(now)
+        if len(self._click_times) < ANGER_CLICKS:
+            return False
+        self._click_times = []
+        self._play_motion("angry", ANGER_DUR)
+        return True
 
     def _stash_in_notch(self):
         """노치에 보관: pocket(주머니) 재해석 — float 켜고 노치 중앙에 스냅, 정지."""
@@ -2076,9 +2223,7 @@ class Pet(QWidget):
         if self._follow:
             if self.mode == "thrown":
                 self.mode = "roam"
-            self._start_cursor_feed()     # start reading the cursor only now
-        else:
-            self._stop_cursor_feed()      # stop the feed -> zero idle cost
+        self._sync_cursor_feed()
         if getattr(self, "_act_follow", None) is not None:
             self._act_follow.setChecked(self._follow)
 
@@ -2137,9 +2282,23 @@ class Pet(QWidget):
     def _sync_float_check(self):
         if not self._floating:
             self._in_notch = False        # float 해제 = 노치 보관도 해제
+            self._pocket_awake_until = 0.0
+        self._sync_cursor_feed()
         # keep the persistent tray checkbox in step with the float mode
         if getattr(self, "_act_float", None) is not None:
             self._act_float.setChecked(self._floating)
+
+    def _sync_cursor_feed(self):
+        if self._follow or self._floating:
+            if self._cursor_plugin is None:
+                self._start_cursor_feed()
+        else:
+            self._stop_cursor_feed()
+
+    def _pocket_render_state(self, state, now):
+        if state not in ("idle", "sleeping"):
+            return state
+        return "idle" if now < self._pocket_awake_until else "sleeping"
 
     def _quit(self):
         self._cleanup()
