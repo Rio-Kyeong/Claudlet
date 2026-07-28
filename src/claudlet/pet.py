@@ -1969,6 +1969,7 @@ class Pet(QWidget):
         vis = "up" if getattr(self, "_auto", False) and \
             state not in AUTO_STATES else None
         petted = now < self._pet_react_until
+        energy = 1.0 if pocket and now < self._pocket_awake_until else self.idle_energy.value
         gaze = cursor_gaze(
             self._cursor_pos(),
             (self.x + self.w / 2, self.y + self.h / 2),
@@ -1983,7 +1984,7 @@ class Pet(QWidget):
             u = U
             ox, oy = PAD_X * U, PAD_Y * U
         C.draw_creature(p, ox, oy, u, state, self.frame,
-                        facing=self.facing, visor=vis, energy=self.idle_energy.value,
+                        facing=self.facing, visor=vis, energy=energy,
                         palette=self._palette, happy=petted, pocket=pocket, gaze=gaze)
         if petted:
             self._draw_hearts(p, 1.0 - (self._pet_react_until - now) / PET_REACT_SEC)

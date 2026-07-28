@@ -1252,14 +1252,21 @@ def test_cursor_gaze_clamps_to_pet_bounds():
     assert P.cursor_gaze((200, 200), (100, 100), (50, 50)) == (1.0, 1.0)
 
 
-def test_pocket_click_wakes_then_returns_to_sleep(pet):
+def test_pocket_click_wakes_then_returns_to_sleep(pet, monkeypatch):
     base = time.monotonic()
     pet._floating = True
+    pet.idle_energy.value = 0.0
     assert pet._pocket_render_state("sleeping", base) == "sleeping"
     pet._note_click(base)
     assert pet._pocket_render_state("sleeping", base) == "idle"
     assert pet._pocket_render_state("sleeping", base + P.POCKET_WAKE_SEC) == "sleeping"
     assert pet._pocket_render_state("work_computer", base) == "work_computer"
+    drawn = {}
+    monkeypatch.setattr(P.time, "monotonic", lambda: base)
+    monkeypatch.setattr(P.C, "draw_creature",
+                        lambda *args, **kwargs: drawn.update(state=args[4], energy=kwargs["energy"]))
+    pet.grab()
+    assert drawn == {"state": "idle", "energy": 1.0}
 
 
 def test_companions_share_pocket_wake_and_follow_gaze(monkeypatch):
