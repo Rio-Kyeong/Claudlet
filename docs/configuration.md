@@ -48,3 +48,43 @@ English):
 ```json
 { "lang": "en" }
 ```
+
+## Placement (dock)
+
+By default the pet **stands docked in the bottom-right corner** of your monitor.
+Several pets line up **side by side** (right to left) instead of piling on top of
+each other, wrapping to another row when one row fills the screen. When a pet
+ahead in the row quits, the ones behind shuffle up so the row stays tight.
+
+**Drag it with the mouse to move it.** Dragging one pet moves the whole row (the
+spacing is preserved), and the spot is saved to the config so pets started later
+appear there too. The right-click menu's **"Reset dock position"** puts the row
+back in its corner.
+
+```json
+{
+  "dock": {
+    "enabled": true,
+    "anchor": "bottom-right",
+    "screen": "primary",
+    "gap": 4,
+    "offset": { "x": 0, "y": 0 }
+  }
+}
+```
+
+- **`enabled`** — `false` brings back the roaming pet (gravity and window
+  perching included). It is the same switch as **"Roam freely"** in the
+  right-click menu, and toggling it there is written back here.
+- **`anchor`** — `bottom-right` (default) · `bottom-left` · `top-right` ·
+  `top-left`. The row grows away from the anchor.
+- **`screen`** — `"primary"` (default) or a monitor index (`0`, `1`, …); an
+  out-of-range index falls back to the primary. Rather than hunting for the right
+  index, it is usually quicker to just **drag the pet onto the monitor you want** —
+  that position is remembered.
+- **`gap`** — pixels between pets.
+- **`offset`** — displacement from the anchor. Dragging writes it for you, so you
+  rarely need to set it by hand.
+
+> `roam_area` / `no_go` zones apply **only while roaming**. A docked pet sits
+> where you put it, so it is not constrained by them.

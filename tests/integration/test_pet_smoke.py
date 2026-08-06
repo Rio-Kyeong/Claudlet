@@ -12,7 +12,7 @@ from claudlet.core import idle_engine
 # so an internal rename touches harness.py / Pet.snapshot(), not this file. The
 # physics/window tests below still set world state through private hooks (there
 # is no public geometry-feed injection) — that is the acknowledged ceiling.
-from harness import pet, send_hook, ping  # noqa: F401  (`pet` used as a fixture)
+from harness import pet, send_hook, ping, undock  # noqa: F401  (`pet` used as a fixture)
 
 # harness.py already created the single QApplication; nothing more to do here.
 
@@ -530,6 +530,7 @@ def test_sessionend_quit_is_cancelled_by_later_event(pet):
 def test_visibility_hides_with_ridden_window():
     from claudlet.platform import geom as W
     p = P.Pet(session_id="hv")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p._geom_active = True                      # pretend a geometry feed is active
         host = W.Win("host", 100, 100, 400, 300, "browser", 1)
@@ -555,6 +556,7 @@ def test_visibility_hides_with_ridden_window():
 def test_visibility_partial_cover_masks():
     from claudlet.platform import geom as W
     p = P.Pet(session_id="hvp")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p._geom_active = True
         host = W.Win("host", 0, 0, 400, 300, "browser", 1)
@@ -577,6 +579,7 @@ def test_visibility_partial_cover_masks():
 def test_visibility_perched_on_top_not_clipped_by_its_window():
     from claudlet.platform import geom as W
     p = P.Pet(session_id="hvt")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p._geom_active = True
         p._contain = None
@@ -1102,6 +1105,7 @@ def test_small_window_centres_pet_instead_of_jutting():
 
 def test_work_search_anchors_locally_and_clears():
     p = P.Pet(session_id="ws")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p.mode = "roam"
         send_hook(p, "PreToolUse", session="ws", tool_name="Grep")
@@ -1313,6 +1317,7 @@ def test_pocket_drop_over_window_stays_frontmost():
 def test_fling_inside_window_bounces_within_it():
     from claudlet.platform import geom as W
     p = P.Pet(session_id="m8")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p._wins = [W.Win("0x1", 0, 0, 4000, 2000, "X")]   # window under the pet
         p.x, p.y = 100.0, 100.0
@@ -1331,6 +1336,7 @@ def test_fling_inside_window_bounces_within_it():
 def test_gentle_drop_on_window_perches():
     from claudlet.platform import geom as W
     p = P.Pet(session_id="m9")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p._wins = [W.Win("0x1", 0, 0, 4000, 2000, "X")]
         p.x, p.y = 100.0, 100.0
@@ -1349,6 +1355,7 @@ def test_gentle_drop_on_window_perches():
 def test_drag_centre_out_of_window_leaves_it():
     from claudlet.platform import geom as W
     p = P.Pet(session_id="m10")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p._contain = W.Win("0x1", 0, 0, 100, 100, "X")   # was living in a window
         p._wins = [p._contain]
@@ -1453,6 +1460,7 @@ def test_companion_window_flags_match_pet_zorder_off_x11():
 
 def test_energy_drains_and_reaches_doze():
     p = P.Pet(session_id="nrg1")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p.idle_energy.value = 0.05             # force exhausted
         p.claude_state = "idle"
@@ -1509,6 +1517,7 @@ def test_explore_falls_back_to_walk_without_window_feed():
     # HIGH energy can pick explore/hop, but with no window feed at all there is
     # nothing to travel to -- must degrade to a plain walk leg, never freeze.
     p = P.Pet(session_id="ex1")
+    undock(p)          # 로밍/중력/퍼치 경로를 보려면 도크를 꺼야 한다
     try:
         p.idle_energy.value = 0.9              # HIGH -> may pick explore/hop
         p.claude_state = "idle"
@@ -1764,3 +1773,162 @@ def test_notch_render_snapshot_stable(pet):
     pet.update()
     snap = pet.snapshot()
     assert snap["in_notch"] is True and snap["floating"] is True
+
+
+# ---------- dock: 코너 고정 배치 + 나란히 세우기 + 드래그로 위치 변경 ----------
+
+def _screen_rect():
+    from PyQt6.QtWidgets import QApplication
+    g = QApplication.primaryScreen().availableGeometry()
+    return g.left(), g.top(), g.width(), g.height()
+
+
+def test_docked_pet_starts_in_the_bottom_right_corner():
+    p = P.Pet(session_id="dk1")
+    try:
+        sx, sy, sw, sh = _screen_rect()
+        assert (p.x, p.y) == (sx + sw - p.w, sy + sh - p.h)
+    finally:
+        p._cleanup()
+
+
+def test_a_second_pet_stands_beside_the_first_not_on_top_of_it():
+    a = P.Pet(session_id="dk2a")
+    b = P.Pet(session_id="dk2b")
+    try:
+        assert (a._dock_slot, b._dock_slot) == (0, 1)
+        assert a.y == b.y                                  # 같은 줄
+        assert a.x - b.x >= a.w                            # 겹치지 않는다
+    finally:
+        b._cleanup()
+        a._cleanup()
+
+
+def test_a_freed_slot_is_reclaimed_so_the_row_stays_tight():
+    a = P.Pet(session_id="dk3a")
+    b = P.Pet(session_id="dk3b")
+    try:
+        assert b._dock_slot == 1
+        a._cleanup()                    # 앞 펫 종료
+        b._dock_repack()
+        assert b._dock_slot == 0
+        b._tick()
+        sx, sy, sw, sh = _screen_rect()
+        assert (b.x, b.y) == (sx + sw - b.w, sy + sh - b.h)   # 코너로 당겨 선다
+    finally:
+        b._cleanup()
+
+
+def test_docked_pet_does_not_roam_or_fall():
+    p = P.Pet(session_id="dk4")
+    try:
+        p.claude_state = "idle"
+        home = (p.x, p.y)
+        for _ in range(200):
+            p._tick()
+        assert (p.x, p.y) == home
+    finally:
+        p._cleanup()
+
+
+def test_dragging_a_docked_pet_moves_it_and_remembers_the_spot():
+    p = P.Pet(session_id="dk5")
+    try:
+        p.x, p.y = p.x - 300.0, p.y - 200.0      # 드래그로 옮긴 결과
+        p._moved = True
+        p.mouseReleaseEvent(_LeftRelease())
+        moved = (p.x, p.y)
+        assert p.mode == "roam" and p._contain is None
+        for _ in range(50):
+            p._tick()
+        assert (p.x, p.y) == moved               # 새 자리에 머문다
+        # 다음에 뜨는 펫도 같은 자리를 기준으로 삼는다(대열 전체가 따라간 것)
+        q = P.Pet(session_id="dk5b")
+        try:
+            assert q._dock_slot == 1
+            assert q.y == moved[1] and moved[0] - q.x == p.w + 4
+        finally:
+            q._cleanup()
+    finally:
+        p._cleanup()
+
+
+def test_a_click_that_barely_moves_snaps_back_into_the_slot():
+    p = P.Pet(session_id="dk6")
+    try:
+        home = (p.x, p.y)
+        p.x += 2.0                              # 클릭하다 살짝 밀림
+        p._moved = False
+        p.mouseReleaseEvent(_LeftRelease())
+        assert (p.x, p.y) == home
+    finally:
+        p._cleanup()
+
+
+def test_dock_reset_undoes_a_drag():
+    p = P.Pet(session_id="dk7")
+    try:
+        home = (p.x, p.y)
+        p.x, p.y = 100.0, 100.0
+        p._moved = True
+        p.mouseReleaseEvent(_LeftRelease())
+        assert (p.x, p.y) != home
+        p._dock_reset()
+        assert (p.x, p.y) == home
+    finally:
+        p._cleanup()
+
+
+def test_roam_toggle_releases_the_pet_and_persists_the_choice():
+    p = P.Pet(session_id="dk8")
+    try:
+        p._toggle_dock()                         # "자유롭게 돌아다니기" 켜기
+        assert p._docked is False and p.mode == "thrown"   # 중력이 되살아난다
+        from claudlet.core import petconfig
+        assert petconfig.load_config()["dock"]["enabled"] is False
+        p._toggle_dock()                         # 다시 끄면 자리로 복귀
+        assert p._docked is True
+        sx, sy, sw, sh = _screen_rect()
+        assert (p.x, p.y) == (sx + sw - p.w, sy + sh - p.h)
+    finally:
+        p._cleanup()
+
+
+def test_docked_pet_is_never_masked_away_by_a_window_on_top():
+    from claudlet.platform import geom as W
+    p = P.Pet(session_id="dk9")
+    try:
+        p._geom_active = True
+        p._wins = [W.Win("big", 0, 0, 4000, 3000, "code", 1)]   # 코너를 덮는 최대화 창
+        p._tick()
+        snap = p.snapshot()
+        assert snap["hidden"] is False and snap["masked"] is False
+    finally:
+        p._cleanup()
+
+
+def test_motions_still_play_while_docked():
+    p = P.Pet(session_id="dk10")
+    try:
+        home = (p.x, p.y)
+        p._play_motion("jump", 5.0)
+        p._tick()
+        assert p.snapshot()["render"] == "jump"
+        assert (p.x, p.y) == home                # 모션은 나와도 자리는 지킨다
+    finally:
+        p._cleanup()
+
+
+def test_dock_offset_broadcast_moves_a_sibling_in_step():
+    a = P.Pet(session_id="dk11a")
+    b = P.Pet(session_id="dk11b")
+    try:
+        gap = a.x - b.x
+        a_home = a.x
+        a._handle_event({"cmd": "dock", "offset": {"x": -150.0, "y": -60.0}})
+        b._handle_event({"cmd": "dock", "offset": {"x": -150.0, "y": -60.0}})
+        assert a.x == a_home - 150.0
+        assert a.x - b.x == gap                  # 간격은 그대로
+    finally:
+        b._cleanup()
+        a._cleanup()

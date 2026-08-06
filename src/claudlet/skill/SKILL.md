@@ -108,7 +108,9 @@ Schema (all keys optional; unknown keys / invalid values are dropped):
   "lang": "auto",                        // "ko" | "en" | "auto"
   "tools":      { "Bash": "work_computer", "*": "work_computer" },
   "events":     { "prompt": "thinking", "celebrate": "juggle" },
-  "raw_events": { "PostToolUse": "celebrate", "SubagentStop": "wave" }
+  "raw_events": { "PostToolUse": "celebrate", "SubagentStop": "wave" },
+  "dock": { "enabled": true, "anchor": "bottom-right",
+            "screen": "primary", "gap": 4, "offset": {"x": 0, "y": 0} }
 }
 ```
 - `tools` — tool name → state (`"*"` = fallback for unmapped tools).
@@ -116,6 +118,16 @@ Schema (all keys optional; unknown keys / invalid values are dropped):
   `celebrate`, `error`, `permission`, `idle_prompt`, `asking`, `autopilot`.
 - `raw_events` — raw hook event name → state (e.g. `PostToolUse`,
   `SubagentStop`, `PreCompact`).
+- `dock` — where the pet stands. Docked is the DEFAULT: it holds a fixed corner
+  slot instead of roaming, and several pets line up side by side (right to left,
+  wrapping to another row) rather than overlapping. The user can drag a pet to
+  move the whole row; the drop point is saved back here as `offset`, so a user
+  asking for "another monitor" is usually better served by dragging than by
+  guessing a `screen` index. `anchor`: `bottom-right` (default) / `bottom-left` /
+  `top-right` / `top-left`. `screen`: `"primary"` or a monitor index.
+  `enabled: false` restores the old roaming behaviour — same switch as the
+  right-click menu's "자유롭게 돌아다니기" / "Roam freely".
+  Note `roam_area` / `no_go` only bind a ROAMING pet; a docked one ignores them.
 - Valid states (the `cpet config` output also lists these): `work_computer`,
   `work_search`, `work_web`, `work_agent`, `work_skill`, `thinking`,
   `celebrate`, `error`, `attention`, `asking`, `autopilot`, `sleeping`, `idle`,
