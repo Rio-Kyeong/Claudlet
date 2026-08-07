@@ -747,8 +747,13 @@ class Pet(QWidget):
                 # answer with our banner so the prober can tell a real pet from
                 # an unrelated process that inherited a stale port number.
                 try:
+                    # `state` rides along purely for diagnosis: "the pet is
+                    # asleep" is either no hook events arriving or the engine
+                    # deciding to sleep, and without this there is no way to
+                    # tell those apart from outside the process.
                     conn.sendall((json.dumps(
-                        {"pet": hostinfo.BANNER_MARK, "session": self.session_id}
+                        {"pet": hostinfo.BANNER_MARK, "session": self.session_id,
+                         "state": self.claude_state}
                     ) + "\n").encode())
                 except OSError:
                     pass
