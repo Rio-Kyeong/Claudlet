@@ -39,6 +39,7 @@ from claudlet.core import creature as C
 from claudlet.core.state_engine import StateEngine, AUTO_ROAM, AUTO_STATES
 from claudlet.platform import focus
 from claudlet.platform import konsole
+from claudlet.platform import winterm
 from claudlet.platform.qdbus import qdbus_bin
 from claudlet.core import hostinfo
 from claudlet.core import petconfig
@@ -530,6 +531,11 @@ class Pet(QWidget):
         # host window is the one whose pid is an ancestor of our Claude process.
         self._ancestor_pids = self._proc_ancestors(claude_pid)
         self._host_wid = None                # internalId of our host window (focus)
+        # Terminal tab title, refreshed by every hook event. On Windows this is
+        # the ONLY thing that can pick our tab out of a Windows Terminal window
+        # -- every tab shares one pid, so pid-ancestry can't (see winterm.py).
+        # None until the first hook event: click then just raises the window.
+        self._tab_title = None
         self._companions = []                # agent followers, one per running agent
         self._departing = []                 # finished agents' companions waving goodbye
         self._throw_trail = []               # main-pet snapshots replayed by companions
@@ -747,13 +753,14 @@ class Pet(QWidget):
                 # answer with our banner so the prober can tell a real pet from
                 # an unrelated process that inherited a stale port number.
                 try:
-                    # `state` rides along purely for diagnosis: "the pet is
-                    # asleep" is either no hook events arriving or the engine
-                    # deciding to sleep, and without this there is no way to
-                    # tell those apart from outside the process.
+                    # `state` and `tab` ride along purely for diagnosis: "the pet
+                    # is asleep" is either no hook events arriving or the engine
+                    # deciding to sleep, and "the click went to the wrong tab" is
+                    # either a stale title or a failed match. Neither is knowable
+                    # from outside the process without these.
                     conn.sendall((json.dumps(
                         {"pet": hostinfo.BANNER_MARK, "session": self.session_id,
-                         "state": self.claude_state}
+                         "state": self.claude_state, "tab": self._tab_title}
                     ) + "\n").encode())
                 except OSError:
                     pass
@@ -808,6 +815,11 @@ class Pet(QWidget):
                 self._motion = motion
                 self._motion_expiry = (time.monotonic() + dur) if dur > 0 else None
             return
+        # The hook reads our terminal's tab title and rides it along on every
+        # event, so it stays current as the conversation (and the title) moves.
+        title = ev.get("title")
+        if title:
+            self._tab_title = title
         self.engine.handle(ev, time.monotonic())
         now = time.monotonic()
         was_idle = self.claude_state in ("idle", "sleeping")
@@ -856,6 +868,7 @@ class Pet(QWidget):
             "petted": time.monotonic() < self._pet_react_until,   # 하트 반응 활성
 
             "following": self._follow,
+            "tab_title": self._tab_title,        # terminal tab we click-focus
             "contained": self._contain.wid if self._contain else None,
             "companions": len(self._companions),
             "social": self._social_act,          # 현재 소셜 act or None
@@ -2690,6 +2703,37 @@ class Pet(QWidget):
                                         hostinfo.win_classes(self.host))
         if target:
             geom.activate_hwnd(target)
+        # ...then switch to OUR tab. Windows Terminal runs every tab in one
+        # process, so the raise above lands on the window but leaves whatever
+        # tab was last active -- the same "two sessions -> only the first tab
+        # shows" problem _konsole_focus_tab solves on KDE.
+        self._winterm_focus_tab()
+
+    def _winterm_focus_tab(self):
+        """Best-effort: select THIS session's Windows Terminal tab over UI
+        Automation, matched by the tab title the hook read off our console.
+
+        Fire-and-forget: the UIA round-trip costs ~0.45s through PowerShell, and
+        blocking on it would stall the animation loop for that long (the window
+        raise above has already happened, so nothing waits on this). No-op off
+        Windows, or before the first hook event has told us our title."""
+        if os.name != "nt" or not self._tab_title:
+            return
+
+        def run(want):
+            env = dict(os.environ)
+            env[winterm.TITLE_ENV] = want          # never spliced into the script
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-Command", winterm.SELECT_PS],
+                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+        try:
+            winterm.focus(self._tab_title, run)
+        except Exception:
+            pass
 
     def _activate_claude_macos(self):
         """Bring the host terminal/IDE app to the front via AppleScript.

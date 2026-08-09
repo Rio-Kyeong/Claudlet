@@ -172,3 +172,91 @@ def test_build_message_counts_only_known_task_types():
         ["claudlet-hook", "Stop"], {"session_id": "s1", "background_tasks": bt}))
     assert msg["bg_tasks"] == 0
     assert msg["bg_agents"] == 0
+
+
+# --- terminal tab title: the only thing that tells two sessions in one
+# --- Windows Terminal apart (see platform/winterm.py)
+
+def _tree(edges):
+    """proc_info from a {pid: (comm, ppid)} map."""
+    return lambda pid: edges.get(pid)
+
+
+TREE = {  # hook -> shell -> claude -> pwsh -> WindowsTerminal -> explorer
+    101: ("claudlet-hook.exe", 90), 90: ("bash.exe", 80),
+    80: ("claude.exe", 70), 70: ("pwsh.exe", 60),
+    60: ("windowsterminal.exe", 50), 50: ("explorer.exe", 1),
+}
+
+
+def test_ancestor_chain_is_nearest_first_and_excludes_self():
+    assert mod.ancestor_chain(101, _tree(TREE)) == [90, 80, 70, 60, 50]
+
+
+def test_ancestor_chain_stops_at_a_dead_parent():
+    assert mod.ancestor_chain(101, _tree({101: ("hook", 90)})) == [90]
+
+
+def test_ancestor_chain_survives_a_parent_cycle():
+    cyclic = {1001: ("a", 1002), 1002: ("b", 1001)}
+    assert mod.ancestor_chain(1001, _tree(cyclic)) == [1002]
+
+
+def test_console_title_takes_the_first_attachable_console():
+    # Claude Code gives each child a FRESH console titled with its exe path, so
+    # the caller walks the chain top-down: the processes above the pane's shell
+    # own no console and fail to attach, and the first success is the pane.
+    titles = {70: "✳ my-session"}          # only pwsh has a console
+    attached = []
+
+    def attach(pid):
+        attached.append(pid)
+        return pid in titles
+
+    def read():
+        return titles[attached[-1]]
+
+    assert mod.console_title([50, 60, 70, 80], attach, read) == "✳ my-session"
+    assert attached == [50, 60, 70]        # stopped as soon as one attached
+
+
+def test_console_title_none_when_nothing_attaches():
+    assert mod.console_title([50, 60], lambda _p: False,
+                             lambda: "never") is None
+
+
+def test_console_title_skips_an_attached_but_empty_console():
+    titles = {60: "", 70: "✳ real"}
+
+    def attach(pid):
+        return pid in titles
+    seq = iter(["", "✳ real"])
+    assert mod.console_title([60, 70], attach, lambda: next(seq)) == "✳ real"
+
+
+def test_console_title_survives_a_win32_error():
+    def attach(_pid):
+        raise OSError("AttachConsole blew up")
+    assert mod.console_title([70], attach, lambda: "x") is None
+
+
+def test_console_title_empty_chain():
+    assert mod.console_title([], lambda _p: True, lambda: "x") is None
+
+
+def test_build_message_forwards_the_tab_title():
+    msg = json.loads(mod.build_message(
+        ["claudlet-hook", "Notification"], {"session_id": "s1"}, "✳ my-session"))
+    assert msg["title"] == "✳ my-session"
+
+
+def test_build_message_omits_the_title_when_unavailable():
+    for absent in (None, ""):
+        msg = json.loads(mod.build_message(
+            ["claudlet-hook", "Stop"], {"session_id": "s1"}, absent))
+        assert "title" not in msg
+
+
+def test_win_console_title_is_none_off_windows(monkeypatch):
+    monkeypatch.setattr(mod.os, "name", "posix")
+    assert mod._win_console_title(101) is None

@@ -1932,3 +1932,85 @@ def test_dock_offset_broadcast_moves_a_sibling_in_step():
     finally:
         b._cleanup()
         a._cleanup()
+
+
+# ---------- click-to-focus: switch to THIS session's terminal tab ----------
+
+def test_hook_event_refreshes_the_tab_title(pet):
+    assert pet.snapshot()["tab_title"] is None          # nothing known yet
+    send_hook(pet, "PreToolUse", session="t1", tool_name="Bash",
+              title="✳ my-session")
+    assert pet.snapshot()["tab_title"] == "✳ my-session"
+    # the title tracks the conversation, so a later event must overwrite it —
+    # a stale title would select the wrong tab (or none).
+    send_hook(pet, "Notification", session="t1", title="⠂ renamed-session")
+    assert pet.snapshot()["tab_title"] == "⠂ renamed-session"
+
+
+def test_an_event_without_a_title_keeps_the_last_one(pet):
+    send_hook(pet, "PreToolUse", session="t2", tool_name="Bash", title="✳ keep-me")
+    send_hook(pet, "Stop", session="t2")                # non-Windows hook: no title
+    assert pet.snapshot()["tab_title"] == "✳ keep-me"
+
+
+def test_tab_focus_follows_the_window_raise_not_replaces_it(monkeypatch):
+    """The raise must still happen: the tab switch is an ADDITION, and on a
+    non-WT terminal it is the only thing that works."""
+    p = P.Pet(session_id="wt1", host="unknown")
+    try:
+        activated, dispatched = [], []
+        p._win32_geom = types.SimpleNamespace(
+            find_focus_target=lambda pids, classes: 4242,
+            activate_hwnd=activated.append)
+        monkeypatch.setattr(P.winterm, "focus",
+                            lambda title, run: dispatched.append(title))
+        p._tab_title = "✳ my-session"
+        p._activate_claude_windows()
+        assert activated == [4242]                      # window still raised
+        assert dispatched == ["✳ my-session"]           # and the tab requested
+    finally:
+        p._cleanup()
+
+
+def test_no_tab_lookup_before_the_first_hook_event(monkeypatch):
+    """Without a title the match would be a wildcard hitting any tab — and
+    spawning PowerShell to achieve nothing is pure cost."""
+    p = P.Pet(session_id="wt2", host="unknown")
+    try:
+        dispatched = []
+        p._win32_geom = types.SimpleNamespace(
+            find_focus_target=lambda pids, classes: 4242,
+            activate_hwnd=lambda h: None)
+        monkeypatch.setattr(P.winterm, "focus",
+                            lambda title, run: dispatched.append(title))
+        assert p.snapshot()["tab_title"] is None
+        p._activate_claude_windows()
+        assert dispatched == []
+    finally:
+        p._cleanup()
+
+
+def test_tab_focus_is_windows_only(monkeypatch):
+    p = P.Pet(session_id="wt3", host="unknown")
+    try:
+        dispatched = []
+        monkeypatch.setattr(P.os, "name", "posix")
+        monkeypatch.setattr(P.winterm, "focus",
+                            lambda title, run: dispatched.append(title))
+        p._tab_title = "✳ my-session"
+        p._winterm_focus_tab()
+        assert dispatched == []
+    finally:
+        p._cleanup()
+
+
+def test_a_broken_tab_focus_never_breaks_the_click(monkeypatch):
+    p = P.Pet(session_id="wt4", host="unknown")
+    try:
+        def boom(_title, _run):
+            raise RuntimeError("powershell missing")
+        monkeypatch.setattr(P.winterm, "focus", boom)
+        p._tab_title = "✳ my-session"
+        p._winterm_focus_tab()                          # must not raise
+    finally:
+        p._cleanup()
