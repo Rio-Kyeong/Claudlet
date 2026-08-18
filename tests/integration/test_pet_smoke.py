@@ -1958,6 +1958,10 @@ def test_tab_focus_follows_the_window_raise_not_replaces_it(monkeypatch):
     non-WT terminal it is the only thing that works."""
     p = P.Pet(session_id="wt1", host="unknown")
     try:
+        # the tab switch is Windows-only, so take that branch here too --
+        # otherwise this asserts nothing off Windows (see test_tab_focus_is_windows_only
+        # for the other direction). winterm.focus is stubbed, so no PowerShell runs.
+        monkeypatch.setattr(P.os, "name", "nt")
         activated, dispatched = [], []
         p._win32_geom = types.SimpleNamespace(
             find_focus_target=lambda pids, classes: 4242,
@@ -1977,6 +1981,7 @@ def test_no_tab_lookup_before_the_first_hook_event(monkeypatch):
     spawning PowerShell to achieve nothing is pure cost."""
     p = P.Pet(session_id="wt2", host="unknown")
     try:
+        monkeypatch.setattr(P.os, "name", "nt")   # else this passes for the wrong reason
         dispatched = []
         p._win32_geom = types.SimpleNamespace(
             find_focus_target=lambda pids, classes: 4242,
