@@ -184,6 +184,11 @@ Claude가 **서브에이전트**를 돌리면 하나당 모자 쓴 **컴패니�
 - **[기여 가이드](CONTRIBUTING.ko.md)** — 개발 환경 설정, 테스트 실행, 코드 스타일, 브랜치 모델
 - **[변경 이력](https://github.com/YeeDochi/Claudlet/releases/latest)** — 릴리즈마다 뭐가 바뀌었는지 (한/영 병기)
 
+## 기여자
+
+- **[@htto0824](https://github.com/htto0824)** — 도크 배치(코너 슬롯, 여러 마리
+  나란히 세우기, 드래그로 대열 이동), Windows Terminal 탭 포커스
+
 ## 라이선스
 
 코드: **MIT** ([LICENSE](LICENSE)). 크리처 아트: **CC0** ([NOTICE](NOTICE)).

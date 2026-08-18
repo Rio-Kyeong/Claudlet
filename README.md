@@ -189,6 +189,11 @@ drive the pet straight from a prompt:
 - **[Contributing](CONTRIBUTING.md)** — dev setup, running tests, code style, branch model
 - **[Changelog](https://github.com/YeeDochi/Claudlet/releases/latest)** — what changed in each release (English + Korean)
 
+## Contributors
+
+- **[@htto0824](https://github.com/htto0824)** — dock placement (corner slots,
+  multi-pet alignment, drag-to-move the whole row) and Windows Terminal tab focus
+
 ## License
 
 Code: **MIT** (see [LICENSE](LICENSE)). Creature artwork: **CC0** (see [NOTICE](NOTICE)).
