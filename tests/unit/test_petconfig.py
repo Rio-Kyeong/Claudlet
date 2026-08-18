@@ -11,7 +11,8 @@ def _write(tmp, obj):
 
 
 EMPTY = {"tool_states": {}, "event_states": {}, "raw_events": {}, "lang": "auto",
-         "roam_area": None, "no_go": [], "palette": "auto"}
+         "roam_area": None, "no_go": [], "palette": "auto",
+         "dock": petconfig.default_dock()}
 
 
 def test_valid_overrides_kept():
@@ -125,3 +126,67 @@ def test_palette_config_key():
     with tempfile.TemporaryDirectory() as tmp:
         assert petconfig.load_config(_write(tmp, {"palette": "shiny_teal"}))["palette"] == "shiny_teal"
         assert petconfig.load_config(_write(tmp, {}))["palette"] == "auto"
+
+
+def test_dock_defaults_to_bottom_right_and_enabled():
+    with tempfile.TemporaryDirectory() as tmp:
+        d = petconfig.load_config(_write(tmp, {}))["dock"]
+        assert d["enabled"] is True and d["anchor"] == "bottom-right"
+        assert d["offset"] == {"x": 0.0, "y": 0.0} and d["screen"] == "primary"
+
+
+def test_dock_overrides_parsed():
+    with tempfile.TemporaryDirectory() as tmp:
+        d = petconfig.load_config(_write(tmp, {"dock": {
+            "enabled": False, "anchor": "top-left", "gap": 12,
+            "screen": 1, "offset": {"x": -40, "y": -8}}}))["dock"]
+        assert d == {"enabled": False, "anchor": "top-left", "gap": 12,
+                     "screen": 1, "offset": {"x": -40.0, "y": -8.0}}
+
+
+def test_dock_bad_values_fall_back_to_defaults():
+    with tempfile.TemporaryDirectory() as tmp:
+        d = petconfig.load_config(_write(tmp, {"dock": {
+            "enabled": "yes", "anchor": "sideways", "gap": "wide",
+            "screen": True, "offset": "nope"}}))["dock"]
+        assert d == petconfig.default_dock()      # screen=true는 0번 모니터가 아니다
+
+
+def test_dock_section_that_is_not_an_object_is_ignored():
+    with tempfile.TemporaryDirectory() as tmp:
+        assert petconfig.load_config(_write(tmp, {"dock": 3}))["dock"] \
+            == petconfig.default_dock()
+
+
+def test_default_dock_is_a_fresh_copy():
+    d = petconfig.default_dock()
+    d["offset"]["x"] = 99.0
+    assert petconfig.default_dock()["offset"]["x"] == 0.0
+
+
+def test_save_dock_merges_and_keeps_the_rest_of_the_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = _write(tmp, {"lang": "ko", "tools": {"Bash": "sing"},
+                         "dock": {"anchor": "top-left"}})
+        saved = petconfig.save_dock({"offset": {"x": -12, "y": -4}}, p)
+        assert saved["anchor"] == "top-left"          # 기존 dock 키는 살아남고
+        assert saved["offset"] == {"x": -12.0, "y": -4.0}
+        cfg = petconfig.load_config(p)
+        assert cfg["lang"] == "ko"                    # dock 밖의 설정도 그대로
+        assert cfg["tool_states"] == {"Bash": "sing"}
+        assert cfg["dock"]["offset"] == {"x": -12.0, "y": -4.0}
+
+
+def test_save_dock_creates_a_config_when_there_is_none():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = os.path.join(tmp, "nested", "config.json")
+        petconfig.save_dock({"enabled": False}, p)
+        assert petconfig.load_config(p)["dock"]["enabled"] is False
+
+
+def test_save_dock_does_not_blow_up_on_a_broken_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = os.path.join(tmp, "config.json")
+        with open(p, "w") as f:
+            f.write("{ broken ")
+        assert petconfig.save_dock({"enabled": False}, p)["enabled"] is False

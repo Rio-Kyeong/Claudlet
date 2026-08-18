@@ -35,10 +35,17 @@ except Exception:
     hostinfo = None
 
 
-def build_message(argv, data):
-    """Build the JSON line to send to the pet. Pure; unit-tested."""
+def build_message(argv, data, title=None):
+    """Build the JSON line to send to the pet. Pure; unit-tested.
+
+    `title` is the terminal tab title this session lives in (see console_title).
+    It is NOT part of the hook payload -- Claude Code sends no title field -- so
+    the caller reads it off the console and passes it in.
+    """
     event = (argv[1] if len(argv) > 1 else "") or data.get("hook_event_name", "")
     msg = {"event": event, "session": data.get("session_id") or "default"}
+    if title:
+        msg["title"] = title
     for key in ("tool_name", "notification_type", "error_type",
                 "permission_mode"):
         val = data.get(key)
@@ -101,6 +108,89 @@ def resolve_claude_pid(start_pid, proc_info, max_hops=32):
             return pid
         pid = ppid
     return 0
+
+
+def ancestor_chain(start_pid, proc_info, max_hops=32):
+    """Ancestor pids of `start_pid`, NEAREST FIRST, excluding start_pid itself.
+
+    `resolve_claude_pid` only needs the first 'claude' hit, but console_title
+    needs the whole ordered chain, so the walk is factored out here. Pure: the
+    same `proc_info(pid) -> (comm, ppid)` injection, so it tests as data."""
+    out, seen, pid = [], {start_pid}, start_pid
+    for _ in range(max_hops):
+        info = proc_info(pid)
+        if info is None:
+            break
+        pid = info[1]
+        if pid <= 1 or pid in seen:
+            break
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def console_title(pids, attach, read):
+    """The tab title of this session's terminal, or None.
+
+    Claude Code keeps the terminal title in sync with the conversation, and
+    Windows Terminal shows that string as the tab's name -- which is the only
+    thing that can tell two sessions apart once their pids collapse into one
+    terminal process (see platform/winterm.py). The hook runs inside the pane,
+    so it can read the title straight off the console.
+
+    `pids` must be ordered FARTHEST ANCESTOR FIRST. That ordering is what makes
+    this correct rather than lucky: Claude Code gives each child it spawns a
+    fresh console whose title is just the child's exe path, so walking upward
+    from the hook would return that junk. Walking DOWNWARD from the top, the
+    processes above the pane's shell (windowsterminal.exe, explorer.exe) own no
+    console at all and their attach simply fails, so the first success is the
+    pane's own shell -- the console Claude Code is writing the title to.
+
+    `attach(pid)` -> truthy if this process is now attached to that pid's
+    console; `read()` -> the current console title. Injected so the decision
+    logic tests without a real console.
+    """
+    for pid in pids:
+        try:
+            if not attach(pid):
+                continue
+            title = read()
+        except Exception:
+            continue
+        if title:
+            return title
+    return None
+
+
+def _win_console_title(start_pid):
+    """console_title() wired to the real Win32 console API. Windows-only;
+    None anywhere else, on any ctypes failure, or when nothing is attachable.
+
+    Never raises: a hook must not fail Claude, and a pet that merely can't
+    switch tabs still raises the terminal window."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+
+        def attach(pid):
+            # A console can only be attached one at a time, so drop whatever
+            # Claude Code handed us before trying the next candidate. stdout is
+            # a pipe here (Claude Code captures hook output), so detaching the
+            # console cannot disturb the reply we still have to write.
+            k.FreeConsole()
+            return bool(k.AttachConsole(int(pid)))
+
+        def read():
+            buf = ctypes.create_unicode_buffer(1024)
+            k.GetConsoleTitleW(buf, 1024)
+            return buf.value
+
+        chain = ancestor_chain(start_pid, _proc_info)
+        return console_title(list(reversed(chain)), attach, read)
+    except Exception:
+        return None
 
 
 _win32_proc_table = None   # lazy, cached per hook invocation (see below)
@@ -220,8 +310,13 @@ def main():
 
     if not launched_fresh:
         try:
+            # Read the tab title on EVERY event, not once at SessionStart: the
+            # title tracks the conversation and changes as work goes on, and the
+            # events that matter most for click-to-focus (Notification, i.e.
+            # Claude is asking) are exactly when it must be current.
             _send(hostinfo.read_session_port(session_id),
-                  build_message(sys.argv, data).encode())
+                  build_message(sys.argv, data, _win_console_title(os.getpid()))
+                  .encode())
         except Exception:
             pass  # pet not running / not ready — ignore silently
 

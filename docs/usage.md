@@ -25,7 +25,10 @@ All `bin/*` tools are Python, so they run wherever Python does.
 
 - **Drag** to pick it up and throw it — it falls with gravity and bounces. Fling it
   inside a window and it bounces off the interior walls; drag it out to leave.
-- **Left-click** — bring the Claude Code terminal/IDE to the front.
+- **Left-click** — bring the Claude Code terminal/IDE to the front, down to **this
+  session's tab**: Windows Terminal (like KDE's Konsole) runs every tab in one
+  process, so raising the window alone can't tell two sessions apart. The tab is
+  matched by its title; when no tab matches, the window is simply raised.
 - **Hover back-and-forth over it** to pet it — hearts pop and it grins; even a
   sleeping one perks up.
 - **Companions play together** — when idle with agent companions around, they

@@ -39,9 +39,12 @@ from claudlet.core import creature as C
 from claudlet.core.state_engine import StateEngine, AUTO_ROAM, AUTO_STATES
 from claudlet.platform import focus
 from claudlet.platform import konsole
+from claudlet.platform import winterm
 from claudlet.platform.qdbus import qdbus_bin
 from claudlet.core import hostinfo
 from claudlet.core import petconfig
+from claudlet.core import dock as dockgeom
+from claudlet.core import dockslot
 from claudlet.core import physics
 from claudlet.core import follow_nav
 from claudlet.core import petting
@@ -111,14 +114,21 @@ UI = {
            "release": "창에서 꺼내기", "quit": "종료",
            "comp_add": "🐣 컴패니언 추가 (테스트)",
            "comp_del": "컴패니언 제거 (테스트)",
-           "zone_edit": "🚫 금지구역 편집", "zone_clear": "금지구역 지우기"},
+           "zone_edit": "🚫 금지구역 편집", "zone_clear": "금지구역 지우기",
+           "roam": "자유롭게 돌아다니기", "dock_reset": "제자리로 (기본 위치)"},
     "en": {"follow": "Follow cursor", "motions": "Motions",
            "float": "Pocket (peek out)", "quiet": "Quiet (mute)",
            "release": "Release from window", "quit": "Quit",
            "comp_add": "🐣 Add companion (test)",
            "comp_del": "Remove companion (test)",
-           "zone_edit": "🚫 Edit no-go zones", "zone_clear": "Clear no-go zones"},
+           "zone_edit": "🚫 Edit no-go zones", "zone_clear": "Clear no-go zones",
+           "roam": "Roam freely", "dock_reset": "Reset dock position"},
 }
+
+# 도크 재정렬 주기(ms): 앞자리 펫이 종료해 생긴 구멍을 뒷펫이 메워 대열을 다시
+# 촘촘하게 만든다. 잠금 파일 몇 개를 열어보는 게 전부라 자주 돌려도 싸지만,
+# 새 펫이 뜨자마자 자리를 빼앗는 것처럼 보이지 않을 만큼은 느긋하게.
+DOCK_REPACK_MS = 2000
 
 # transient motions offered in the menus: (name, seconds, {lang: label})
 MOTION_MENU = [
@@ -472,13 +482,28 @@ class Pet(QWidget):
             union = union.united(g)
         self.screen_rect = union
         self.floor_y = primary.bottom() - self.h
-        self.x = float(random.uniform(primary.left(), max(primary.left(), primary.right() - self.w)))
-        self.y = float(self.floor_y)
-        self.move(int(self.x), int(self.y))
 
         self.frame = 0
         self.facing = 1
         cfg = petconfig.load_config()
+        # 도크: 모니터 코너에 붙어 서고, 여러 마리는 슬롯 번호대로 옆에 나란히.
+        # 슬롯은 프로세스 간 잠금으로 잡으므로 세션마다 뜬 펫들이 서로를 몰라도
+        # 자리가 겹치지 않는다. 슬롯을 못 잡으면(런타임 디렉터리 문제) 0번으로
+        # 폴백 — 겹칠지언정 펫이 안 뜨는 것보다 낫다.
+        self._dock = cfg.get("dock") or petconfig.default_dock()
+        self._docked = bool(self._dock["enabled"])
+        self._dock_slot, self._dock_fd = dockslot.claim()
+        if self._dock_slot is None:
+            self._dock_slot = 0
+        self._repack_timer = None
+        if self._docked:
+            self.x, self.y = self._dock_pos()
+        else:
+            self.x = float(random.uniform(primary.left(),
+                                          max(primary.left(), primary.right() - self.w)))
+            self.y = float(self.floor_y)
+        self.move(int(self.x), int(self.y))
+
         self._roam_area = cfg.get("roam_area")
         self._no_go = cfg.get("no_go") or []
         self._zone_overlays = []             # one open ZoneOverlay per monitor
@@ -506,6 +531,11 @@ class Pet(QWidget):
         # host window is the one whose pid is an ancestor of our Claude process.
         self._ancestor_pids = self._proc_ancestors(claude_pid)
         self._host_wid = None                # internalId of our host window (focus)
+        # Terminal tab title, refreshed by every hook event. On Windows this is
+        # the ONLY thing that can pick our tab out of a Windows Terminal window
+        # -- every tab shares one pid, so pid-ancestry can't (see winterm.py).
+        # None until the first hook event: click then just raises the window.
+        self._tab_title = None
         self._companions = []                # agent followers, one per running agent
         self._departing = []                 # finished agents' companions waving goodbye
         self._throw_trail = []               # main-pet snapshots replayed by companions
@@ -577,11 +607,103 @@ class Pet(QWidget):
         self.timer.timeout.connect(self._tick)
         self.timer.start(int(1000 / FPS))
 
+        # 도크 재정렬: 앞자리 펫이 사라지면 뒷펫이 당겨 서서 대열이 촘촘해진다.
+        self._repack_timer = QTimer(self)
+        self._repack_timer.timeout.connect(self._dock_repack)
+        if self._docked:
+            self._repack_timer.start(DOCK_REPACK_MS)
+
         self._geom_kde = None
         self._setup_geom_feed()
 
         # drop the taskbar/pager entry once the window is mapped (KWin script)
         QTimer.singleShot(400, self._skip_taskbar)
+
+    # ---------- dock (고정 배치) ----------
+    def _dock_screen(self):
+        """도크 기준 모니터의 작업영역 (x, y, w, h).
+
+        config의 `screen`이 "primary"면 주 모니터(= 사용자가 말하는 "1번 모니터"),
+        정수면 QApplication.screens()의 그 인덱스. 범위를 벗어나면 주 모니터로
+        폴백한다 — 모니터를 뽑았다고 펫이 화면 밖에 서 있으면 안 된다."""
+        want = self._dock.get("screen", "primary")
+        g = None
+        if isinstance(want, int) and not isinstance(want, bool):
+            screens = QApplication.screens()
+            if 0 <= want < len(screens):
+                g = screens[want].availableGeometry()
+        if g is None:
+            g = QApplication.primaryScreen().availableGeometry()
+        return (g.left(), g.top(), g.width(), g.height())
+
+    def _dock_offset(self):
+        off = self._dock.get("offset") or {}
+        return (float(off.get("x", 0.0)), float(off.get("y", 0.0)))
+
+    def _dock_pos(self):
+        """이 펫이 서야 할 도크 위치(창 좌상단). 슬롯 번호 + 공통 offset."""
+        return dockgeom.slot_position(
+            self._dock_screen(), (self.w, self.h), self._dock_slot,
+            anchor=self._dock.get("anchor", dockgeom.DEFAULT_ANCHOR),
+            gap=self._dock.get("gap", dockgeom.DEFAULT_GAP),
+            offset=self._dock_offset())
+
+    def _dock_snap(self):
+        """도크 위치로 즉시 이동(중력/속도는 죽인다)."""
+        self.x, self.y = self._dock_pos()
+        self.vx = self.vy = 0.0
+        self.mode = "roam"
+        self._contain = None
+        self.move(int(self.x), int(self.y))
+
+    def _dock_repack(self):
+        """앞자리가 비었으면 당겨 선다. 새 슬롯을 **먼저** 잡고 나서 옛 자리를
+        놓는다 — 순서를 뒤집으면 그 틈에 다른 펫이 옛 자리를 가로채 두 마리가
+        같은 칸에 설 수 있다."""
+        if not self._docked or self._dock_fd is None:
+            return
+        slot, fd = dockslot.claim_lower(self._dock_slot)
+        if slot is None:
+            return
+        dockslot.release(self._dock_fd)
+        self._dock_slot, self._dock_fd = slot, fd
+
+    def _toggle_dock(self):
+        """우클릭 메뉴의 "자유롭게 돌아다니기": 켜면 배회, 끄면 도크로 복귀.
+
+        선택은 config에 남아 다음 펫에도 적용된다 — 매번 다시 끄게 만들면 설정이
+        아니라 잔소리다."""
+        self._docked = not self._docked
+        self._dock = petconfig.save_dock({"enabled": self._docked})
+        if self._docked:
+            self._dock_snap()
+        else:
+            self.mode = "thrown"          # 중력이 알아서 바닥까지 내려준다
+            self.target_x = None
+        self._sync_dock_check()
+
+    def _dock_reset(self):
+        """드래그로 옮긴 offset을 지우고 원래 코너로. 펫을 화면 밖에 떨어뜨려
+        다시 잡을 수 없게 됐을 때의 탈출구."""
+        self._dock = petconfig.save_dock({"offset": {"x": 0.0, "y": 0.0}})
+        self._broadcast_dock()
+        if self._docked:
+            self._dock_snap()
+
+    def _sync_dock_check(self):
+        if getattr(self, "_act_dock", None) is not None:
+            self._act_dock.setChecked(not self._docked)
+        if self._repack_timer is not None:
+            if self._docked:
+                self._repack_timer.start(DOCK_REPACK_MS)
+            else:
+                self._repack_timer.stop()
+
+    def _broadcast_dock(self):
+        """바뀐 offset을 살아 있는 모든 펫에게 알린다 — 한 마리를 끌면 대열이
+        통째로 따라오도록. 자기 자신에게도 가지만 같은 값이라 무해하다."""
+        hostinfo.broadcast(json.dumps({"cmd": "dock",
+                                       "offset": self._dock.get("offset")}) + "\n")
 
     # ---------- Claude Code hook socket ----------
     def _init_socket(self):
@@ -631,8 +753,14 @@ class Pet(QWidget):
                 # answer with our banner so the prober can tell a real pet from
                 # an unrelated process that inherited a stale port number.
                 try:
+                    # `state` and `tab` ride along purely for diagnosis: "the pet
+                    # is asleep" is either no hook events arriving or the engine
+                    # deciding to sleep, and "the click went to the wrong tab" is
+                    # either a stale title or a failed match. Neither is knowable
+                    # from outside the process without these.
                     conn.sendall((json.dumps(
-                        {"pet": hostinfo.BANNER_MARK, "session": self.session_id}
+                        {"pet": hostinfo.BANNER_MARK, "session": self.session_id,
+                         "state": self.claude_state, "tab": self._tab_title}
                     ) + "\n").encode())
                 except OSError:
                     pass
@@ -644,6 +772,19 @@ class Pet(QWidget):
         # not a Claude event: shut down cleanly and stop processing.
         if ev.get("cmd") == "quit":
             self._quit()
+            return
+        # 형제 펫이 드래그로 대열을 옮겼다는 통지. 같은 offset을 공유해야 간격이
+        # 유지되므로 받은 값을 그대로 반영한다(config는 옮긴 쪽이 이미 저장했다).
+        if ev.get("cmd") == "dock":
+            off = ev.get("offset")
+            if isinstance(off, dict):
+                try:
+                    self._dock["offset"] = {"x": float(off.get("x", 0.0)),
+                                            "y": float(off.get("y", 0.0))}
+                except (TypeError, ValueError):
+                    return
+                if self._docked and self.mode != "held":
+                    self._dock_snap()
             return
         # A motion command is a user override, NOT a Claude event: it must not
         # touch the engine or the SessionEnd quit timer.
@@ -674,6 +815,11 @@ class Pet(QWidget):
                 self._motion = motion
                 self._motion_expiry = (time.monotonic() + dur) if dur > 0 else None
             return
+        # The hook reads our terminal's tab title and rides it along on every
+        # event, so it stays current as the conversation (and the title) moves.
+        title = ev.get("title")
+        if title:
+            self._tab_title = title
         self.engine.handle(ev, time.monotonic())
         now = time.monotonic()
         was_idle = self.claude_state in ("idle", "sleeping")
@@ -722,6 +868,7 @@ class Pet(QWidget):
             "petted": time.monotonic() < self._pet_react_until,   # 하트 반응 활성
 
             "following": self._follow,
+            "tab_title": self._tab_title,        # terminal tab we click-focus
             "contained": self._contain.wid if self._contain else None,
             "companions": len(self._companions),
             "social": self._social_act,          # 현재 소셜 act or None
@@ -758,6 +905,10 @@ class Pet(QWidget):
         # (and wherever you drag it), but the pet keeps its normal animation.
         floating = self._floating and self.mode not in ("held", "thrown")
         following = self._follow and self.mode not in ("held", "thrown")
+        # 도크는 배회/중력보다 위, 주머니(float)·커서 따라오기보다 아래 우선순위:
+        # 자리에 붙어 서는 게 기본이지만, 사용자가 명시적으로 켠 모드는 이긴다.
+        docked = (self._docked and not self._floating and not self._follow
+                  and self.mode not in ("held", "thrown"))
         # in auto mode the "looking things up" states wander (visor on); coding/
         # agent/skill stay put and focus. idle/waiting roam as before.
         roaming = (eff in ("idle", "sleeping") or eff in AUTO_ROAM) \
@@ -769,6 +920,14 @@ class Pet(QWidget):
             self._render_state = "held"     # dangling from the cursor
         elif self.mode == "thrown":
             self._physics()
+        elif docked:
+            # 자리에 붙어 서기: 배회·중력·창 걸터앉기를 모두 건너뛰고 슬롯 위치를
+            # 매 틱 다시 계산한다(모니터 해상도나 작업표시줄이 바뀌어도 따라온다).
+            # 표정/애니메이션은 평소대로 살아 있다 — 멈추는 건 이동뿐.
+            self._contain = None
+            self.x, self.y = self._dock_pos()
+            if not motion_active:
+                self._render_state = eff
         elif motion_active:
             pass                            # transient motion already set the render
         elif floating:
@@ -1808,8 +1967,10 @@ class Pet(QWidget):
         partially covered -> shown only over the uncovered sliver; on the bare
         desktop -> fully visible (a maximized window in front never hides a pet
         wandering the wallpaper). No-op without an active geometry feed."""
+        # 도크 중엔 창을 타고 있지 않다(고정 좌표에 떠 있다) -> 가릴 근거가 없다.
+        # 마스킹을 그대로 두면 코너에 겹친 최대화 창이 펫을 통째로 지워버린다.
         if (not getattr(self, "_geom_active", False)
-                or self.mode == "held" or self._floating):
+                or self.mode == "held" or self._floating or self._docked):
             self._show_full()
             return
         if self._contain is not None:
@@ -2063,6 +2224,22 @@ class Pet(QWidget):
             self._note_click(time.monotonic())
             self._activate_claude()
             self.mode = "roam"
+            if self._docked:
+                self._dock_snap()          # 클릭만으로 1~2px 밀렸어도 칸에 되맞춘다
+        elif self._docked and not self._floating:
+            # 도크 이동: 놓인 자리를 이 슬롯의 기준 위치와 비교해 **대열 전체**의
+            # 변위로 환산하고 config에 남긴다. 그래야 옆 펫들이 간격을 유지한 채
+            # 같이 따라오고, 다음에 뜨는 펫도 같은 자리에 선다.
+            drop = dockgeom.clamp_point(self.x, self.y, (self.w, self.h),
+                                        (self.screen_rect.left(), self.screen_rect.top(),
+                                         self.screen_rect.width(), self.screen_rect.height()))
+            ox, oy = dockgeom.offset_for(
+                self._dock_screen(), (self.w, self.h), self._dock_slot, drop,
+                anchor=self._dock.get("anchor", dockgeom.DEFAULT_ANCHOR),
+                gap=self._dock.get("gap", dockgeom.DEFAULT_GAP))
+            self._dock = petconfig.save_dock({"offset": {"x": ox, "y": oy}})
+            self._broadcast_dock()
+            self._dock_snap()
         elif self._floating:
             # floating: stay put wherever you drop it — no fall, no perch, no
             # snap-back. Fixed mode stays above windows instead of entering one.
@@ -2164,6 +2341,14 @@ class Pet(QWidget):
             sub.addAction(act)
             motion_acts[act] = (name, dur)
 
+        a_roam = QAction(self.ui["roam"], m, checkable=True)
+        a_roam.setChecked(not self._docked)
+        m.addAction(a_roam)
+        a_dock_reset = None
+        if self._docked:
+            a_dock_reset = QAction(self.ui["dock_reset"], m)
+            m.addAction(a_dock_reset)
+
         a_float = QAction(self.ui["float"], m, checkable=True)
         a_float.setChecked(self._floating)
         m.addAction(a_float)
@@ -2197,6 +2382,10 @@ class Pet(QWidget):
             return
         if chosen == a_follow:
             self._toggle_follow()
+        elif chosen == a_roam:
+            self._toggle_dock()
+        elif a_dock_reset is not None and chosen == a_dock_reset:
+            self._dock_reset()
         elif chosen in motion_acts:
             name, dur = motion_acts[chosen]
             self._play_motion(name, dur)
@@ -2311,6 +2500,7 @@ class Pet(QWidget):
         self._act_dnd = None
         self._act_float = None
         self._act_follow = None
+        self._act_dock = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = None
             return
@@ -2338,6 +2528,15 @@ class Pet(QWidget):
                 sub.addAction(act)
                 act.triggered.connect(
                     lambda _checked=False, n=name, d=dur: self._play_motion(n, d))
+
+            self._act_dock = QAction(self.ui["roam"], m, checkable=True)
+            self._act_dock.setChecked(not self._docked)
+            m.addAction(self._act_dock)
+            self._act_dock.triggered.connect(self._toggle_dock)
+
+            act_dock_reset = QAction(self.ui["dock_reset"], m)
+            m.addAction(act_dock_reset)
+            act_dock_reset.triggered.connect(self._dock_reset)
 
             self._act_float = QAction(self.ui["float"], m, checkable=True)
             m.addAction(self._act_float)
@@ -2504,6 +2703,37 @@ class Pet(QWidget):
                                         hostinfo.win_classes(self.host))
         if target:
             geom.activate_hwnd(target)
+        # ...then switch to OUR tab. Windows Terminal runs every tab in one
+        # process, so the raise above lands on the window but leaves whatever
+        # tab was last active -- the same "two sessions -> only the first tab
+        # shows" problem _konsole_focus_tab solves on KDE.
+        self._winterm_focus_tab()
+
+    def _winterm_focus_tab(self):
+        """Best-effort: select THIS session's Windows Terminal tab over UI
+        Automation, matched by the tab title the hook read off our console.
+
+        Fire-and-forget: the UIA round-trip costs ~0.45s through PowerShell, and
+        blocking on it would stall the animation loop for that long (the window
+        raise above has already happened, so nothing waits on this). No-op off
+        Windows, or before the first hook event has told us our title."""
+        if os.name != "nt" or not self._tab_title:
+            return
+
+        def run(want):
+            env = dict(os.environ)
+            env[winterm.TITLE_ENV] = want          # never spliced into the script
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-Command", winterm.SELECT_PS],
+                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+        try:
+            winterm.focus(self._tab_title, run)
+        except Exception:
+            pass
 
     def _activate_claude_macos(self):
         """Bring the host terminal/IDE app to the front via AppleScript.
@@ -2569,6 +2799,12 @@ class Pet(QWidget):
             ov.close()
         self._zone_overlays = []
         self._zone_overlay = None
+        # 도크 자리 반납: 프로세스가 죽으면 OS가 어차피 풀어주지만, 먼저 놓아야
+        # 뒤에 선 펫이 다음 재정렬 틱에 바로 당겨 설 수 있다.
+        if getattr(self, "_repack_timer", None) is not None:
+            self._repack_timer.stop()
+        dockslot.release(getattr(self, "_dock_fd", None))
+        self._dock_fd = None
         self._stop_cursor_feed()
         for plugin in (getattr(self, "_activate_plugin", None),):
             if plugin:
@@ -2614,15 +2850,12 @@ def _pid_alive(pid):
 
 
 def _lock_exclusive_nonblocking(fd):
-    """Cross-platform advisory lock: fcntl.flock on POSIX, msvcrt on Windows."""
-    if os.name == "posix":
-        import fcntl
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    else:
-        import msvcrt
-        os.write(fd, b"\0")           # msvcrt.locking needs a byte to lock
-        os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    """Cross-platform advisory lock: fcntl.flock on POSIX, msvcrt on Windows.
+
+    The dock slot registry needs the identical primitive, so the implementation
+    now lives in core/dockslot.py (importable without Qt) and this stays as the
+    name main() and the tests already use."""
+    dockslot.lock_exclusive_nonblocking(fd)
 
 
 def main():

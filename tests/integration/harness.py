@@ -30,6 +30,7 @@ import pytest
 from PyQt6.QtWidgets import QApplication
 
 from claudlet import pet as P
+from claudlet.core import dockslot
 from claudlet.core import hostinfo
 
 # One QApplication for the whole test process (Qt forbids a second).
@@ -78,6 +79,23 @@ def send_hook(pet, event=None, **payload):
 def ping(pet):
     """Send a liveness ping and return the pet's reply string (its banner)."""
     return _deliver(pet, hostinfo.PING, want_reply=True)
+
+
+def undock(p):
+    """Switch a pet out of dock mode and hand it back.
+
+    Docking is the default: the pet stands on a fixed slot at a screen corner
+    and therefore deliberately short-circuits roaming, gravity, window perching
+    and occlusion masking. Every test that drives those paths has to opt out
+    first — that's what this says out loud. Releases the dock slot too, so a
+    long test module doesn't hoard the whole lineup.
+    """
+    p._docked = False
+    dockslot.release(p._dock_fd)
+    p._dock_fd = None
+    if getattr(p, "_repack_timer", None) is not None:
+        p._repack_timer.stop()
+    return p
 
 
 @pytest.fixture

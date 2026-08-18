@@ -15,6 +15,7 @@ import json
 import os
 import sys
 
+from claudlet.core import dock as dockgeom
 from claudlet.core import petconfig
 from claudlet.core.state_engine import MAPPABLE_STATES, DEFAULT_EVENT_STATES
 
@@ -40,12 +41,18 @@ def diagnose(raw):
             ignored.append("raw_events.%s=%r (not a valid state)" % (key, val))
     if "lang" in raw and raw.get("lang") not in ("ko", "en", "auto"):
         ignored.append("lang=%r (use ko | en | auto)" % (raw.get("lang"),))
+    d = raw.get("dock")
+    if "dock" in raw and not isinstance(d, dict):
+        ignored.append("dock=%r (must be an object)" % (d,))
+    elif isinstance(d, dict) and d.get("anchor") not in (None,) + dockgeom.ANCHORS:
+        ignored.append("dock.anchor=%r (use %s)"
+                       % (d.get("anchor"), " | ".join(dockgeom.ANCHORS)))
 
     return {"accepted": accepted, "ignored": ignored}
 
 
 _DEFAULTS = {"tool_states": {}, "event_states": {}, "raw_events": {},
-             "lang": "auto"}
+             "lang": "auto", "dock": petconfig.default_dock()}
 
 
 def build_report(path=None):
@@ -143,6 +150,7 @@ def render(r):
         "tools:      " + json.dumps(acc["tool_states"], ensure_ascii=False),
         "events:     " + json.dumps(acc["event_states"], ensure_ascii=False),
         "raw_events: " + json.dumps(acc["raw_events"], ensure_ascii=False),
+        "dock:       " + json.dumps(acc.get("dock", {}), ensure_ascii=False),
     ]
     if r["ignored"]:
         lines.append("ignored (present in the file but dropped — fix these):")
@@ -151,6 +159,8 @@ def render(r):
         "---",
         "valid states: " + ", ".join(sorted(MAPPABLE_STATES)),
         "event slots:  " + ", ".join(DEFAULT_EVENT_STATES),
+        "dock anchors: " + ", ".join(dockgeom.ANCHORS)
+        + "   (dock.enabled=false -> 예전처럼 배회)",
         "edit the file (or ask Claude via /claudlet config), then restart the pet.",
     ]
     return "\n".join(lines)

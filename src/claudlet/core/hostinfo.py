@@ -165,6 +165,41 @@ def _replace_retrying(src, dst, attempts=10, delay=0.02):
             time.sleep(delay)
 
 
+def port_files():
+    """Every published .port file — one per pet that has started, live or not."""
+    import glob
+    return glob.glob(os.path.join(runtime_dir(), "claudlet-*.port"))
+
+
+def broadcast(line, timeout=0.3):
+    """Send one JSON line to every live pet; return how many accepted it.
+
+    The transport half of what `claudlet-motion` does, lifted here so the pet
+    itself can talk to its siblings (dock offset changes) without importing a
+    CLI module. Deliberately does NOT unlink stale files the way motion.send
+    does: this runs inside a pet's event loop, where a refused connect is far
+    more likely to be a sibling that is merely mid-startup than a dead one, and
+    deleting a live pet's port file would sever it permanently.
+    """
+    n = 0
+    payload = line.encode("utf-8")
+    for path in port_files():
+        port = read_port_file(path)
+        if port is None:
+            continue
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect((LOOPBACK, port))
+            s.sendall(payload)
+            n += 1
+        except OSError:
+            pass
+        finally:
+            s.close()
+    return n
+
+
 def pet_alive(session_id, timeout=0.3):
     """True only if THIS session's pet is really listening — proven by the
     liveness handshake, not a bare connect. Guards two failure modes a plain
