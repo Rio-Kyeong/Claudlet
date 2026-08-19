@@ -2011,6 +2011,32 @@ def test_no_tab_lookup_before_the_first_hook_event(monkeypatch):
         p._cleanup()
 
 
+def test_a_standalone_pet_still_knows_its_host_process():
+    """--claude-pid 없이 띄운 펫(수동 실행/standalone)도 조상 pid를 알아야 한다.
+
+    0을 그대로 조상 탐색에 넘기면 빈 집합이 나오고, 그러면 _konsole_focus_tab도
+    _update_host_wid도 조기 반환한다 -> 클릭하면 창은 올라오는데 탭은 그대로.
+    실기(Konsole 탭 2개)에서 재현한 버그다.
+    """
+    p = P.Pet(session_id="standalone")               # claude_pid 없음
+    try:
+        assert p._ancestor_pids                      # 비어 있으면 포커스가 죽는다
+        assert os.getppid() in p._ancestor_pids      # 펫을 띄운 셸이 들어 있다
+    finally:
+        p._cleanup()
+
+
+def test_an_explicit_claude_pid_still_wins():
+    """훅으로 뜬 경우(claude_pid > 0)는 동작이 그대로여야 한다 — 자기 자신이
+    아니라 넘겨받은 pid에서 위로 훑는다."""
+    p = P.Pet(session_id="hooked", claude_pid=os.getppid())
+    try:
+        assert os.getppid() in p._ancestor_pids
+        assert os.getpid() not in p._ancestor_pids   # 자기 조상으로 떨어지지 않았다
+    finally:
+        p._cleanup()
+
+
 def test_tab_focus_is_windows_only(monkeypatch):
     p = P.Pet(session_id="wt3", host="unknown")
     try:

@@ -529,7 +529,11 @@ class Pet(QWidget):
         # host-window tracking: hide the pet when its own console/IDE window is
         # minimized or fully covered, and aim click-to-focus at THAT window. The
         # host window is the one whose pid is an ancestor of our Claude process.
-        self._ancestor_pids = self._proc_ancestors(claude_pid)
+        # claude_pid가 없으면(standalone/수동 실행) 펫 자신의 조상으로 떨어진다.
+        # 0을 그대로 넘기면 빈 집합이 나오고, 그러면 _konsole_focus_tab도
+        # _update_host_wid도 조기 반환해 클릭이 "창은 올라오는데 탭은 그대로"가
+        # 된다. 펫을 띄운 셸이 곧 그 탭의 셸이므로 자기 조상이 정확히 맞다.
+        self._ancestor_pids = self._proc_ancestors(claude_pid or os.getpid())
         self._host_wid = None                # internalId of our host window (focus)
         # Terminal tab title, refreshed by every hook event. On Windows this is
         # the ONLY thing that can pick our tab out of a Windows Terminal window
