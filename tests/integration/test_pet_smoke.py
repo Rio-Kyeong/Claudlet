@@ -1204,6 +1204,7 @@ def test_no_social_without_companion(pet, monkeypatch):
 
 def test_petting_reaction_activates_and_expires(pet):
     # 왕복 호버를 seam(_maybe_pet)으로 먹인다: 판정은 순수함수, 발동/반응은 pet.
+    assert pet.cursor().shape() == Qt.CursorShape.OpenHandCursor
     pet.claude_state = "idle"
     base = time.monotonic()
     for i, x in enumerate([0, 40, 0, 40, 0, 40, 0]):

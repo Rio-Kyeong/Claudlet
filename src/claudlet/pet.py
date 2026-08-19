@@ -578,6 +578,7 @@ class Pet(QWidget):
         self._pet_react_until = 0.0      # 하트 반응 종료 시각(monotonic)
         self._last_pet_fire = None       # 쿨다운 기준
         self.setMouseTracking(True)      # 버튼 없이도 mouseMoveEvent 수신
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
         # follow mode: walk toward the mouse cursor until toggled off
         self._follow = False
         self._follow_jump = False        # airborne on a follow-aimed jump
