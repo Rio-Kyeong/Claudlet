@@ -1,6 +1,6 @@
 import sys, os, time, types
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt, QPoint, QPointF
 from claudlet import pet as P
 from claudlet import roambounds
 from claudlet.core import hostinfo
@@ -1202,9 +1202,24 @@ def test_no_social_without_companion(pet, monkeypatch):
     assert pet.snapshot()["social"] is None      # 컴패니언 없으면 발동 안 함
 
 
+def test_the_cursor_says_the_pet_is_grabbable(pet):
+    """펼친 손 = 집을 수 있음, 쥔 손 = 집고 있음. 놓으면 되돌아온다."""
+    class _LeftPress:
+        def button(self):
+            return Qt.MouseButton.LeftButton
+
+        def globalPosition(self):
+            return QPointF(100.0, 100.0)
+
+    assert pet.cursor().shape() == Qt.CursorShape.OpenHandCursor
+    pet.mousePressEvent(_LeftPress())
+    assert pet.cursor().shape() == Qt.CursorShape.ClosedHandCursor
+    pet.mouseReleaseEvent(_LeftRelease())
+    assert pet.cursor().shape() == Qt.CursorShape.OpenHandCursor
+
+
 def test_petting_reaction_activates_and_expires(pet):
     # 왕복 호버를 seam(_maybe_pet)으로 먹인다: 판정은 순수함수, 발동/반응은 pet.
-    assert pet.cursor().shape() == Qt.CursorShape.OpenHandCursor
     pet.claude_state = "idle"
     base = time.monotonic()
     for i, x in enumerate([0, 40, 0, 40, 0, 40, 0]):

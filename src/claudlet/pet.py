@@ -2195,6 +2195,7 @@ class Pet(QWidget):
             self._moved = False
             self._vel_samples = [(time.monotonic(), self._press_global)]
             self.mode = "held"
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)   # 쥔 손: 집고 있는 동안
             self._held_chain = []
             self._held_chain_prev = []
             self._follow_jump = False      # a grab cancels any follow-jump
@@ -2221,6 +2222,7 @@ class Pet(QWidget):
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton:
             return
+        self.setCursor(Qt.CursorShape.OpenHandCursor)          # 놓으면 다시 펼친 손
         if not self._moved:
             self._note_click(time.monotonic())
             self._activate_claude()
