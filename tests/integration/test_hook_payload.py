@@ -260,3 +260,15 @@ def test_build_message_omits_the_title_when_unavailable():
 def test_win_console_title_is_none_off_windows(monkeypatch):
     monkeypatch.setattr(mod.os, "name", "posix")
     assert mod._win_console_title(101) is None
+
+
+def test_forwards_cwd_so_the_pet_knows_its_project():
+    msg = json.loads(mod.build_message(
+        ["claudlet-hook", "PreToolUse"],
+        {"session_id": "s1", "cwd": r"C:\Users\YYC\IdeaProjects\thing"}))
+    assert msg["cwd"] == r"C:\Users\YYC\IdeaProjects\thing"
+
+
+def test_cwd_omitted_when_the_payload_has_none():
+    msg = json.loads(mod.build_message(["claudlet-hook", "Stop"], {"session_id": "s1"}))
+    assert "cwd" not in msg

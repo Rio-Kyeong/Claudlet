@@ -66,6 +66,8 @@ if user32 is not None:
     user32.IsIconic.restype = wintypes.BOOL
     user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
     user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
     user32.GetWindowLongW.restype = wintypes.LONG
     user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
@@ -349,6 +351,46 @@ def find_focus_target(ancestor_pids, class_subs):
     wins = [_g.Win(hwnd, x, y, w, h, cls, pid)
             for (hwnd, cls, x, y, w, h, pid) in _enum_windows(include_iconic=True)]
     return _g.pick_focus_target(wins, ancestor_pids, class_subs)
+
+
+def pid_window_titles(pid=None):
+    """[(hwnd, title)] for titled top-level windows; all of them if `pid` is None.
+
+    Minimized windows are included (the caller may want to restore one) and no
+    geometry is collected, so this stays clear of the perch feed's
+    _enum_windows and its DWM/DPI work. Used to pick one project window out of
+    a JetBrains IDE, which runs every open project in a single process.
+    """
+    if user32 is None:
+        return []
+    out = []
+
+    def _cb(hwnd, _lparam):
+        if pid is not None:
+            wpid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+            if wpid.value != pid:
+                return True
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 1)
+        user32.GetWindowTextW(hwnd, buf, n + 1)
+        if buf.value:
+            out.append((hwnd, buf.value))
+        return True
+
+    user32.EnumWindows(_WNDENUMPROC(_cb), 0)
+    return out
+
+
+def window_pid(hwnd):
+    """Owning pid of `hwnd`, or None."""
+    if user32 is None or not hwnd:
+        return None
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    return pid.value or None
 
 
 def activate_hwnd(hwnd):

@@ -46,7 +46,9 @@ def build_message(argv, data, title=None):
     msg = {"event": event, "session": data.get("session_id") or "default"}
     if title:
         msg["title"] = title
-    for key in ("tool_name", "notification_type", "error_type",
+    # cwd tells the pet which project it speaks for: it labels the pet and
+    # picks its window out of a JetBrains IDE (one process, every project).
+    for key in ("cwd", "tool_name", "notification_type", "error_type",
                 "permission_mode"):
         val = data.get(key)
         if val:

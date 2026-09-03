@@ -40,6 +40,7 @@ from claudlet.core.state_engine import StateEngine, AUTO_ROAM, AUTO_STATES
 from claudlet.platform import focus
 from claudlet.platform import konsole
 from claudlet.platform import winterm
+from claudlet.platform import jetbrains
 from claudlet.platform.qdbus import qdbus_bin
 from claudlet.core import hostinfo
 from claudlet.core import petconfig
@@ -540,6 +541,13 @@ class Pet(QWidget):
         # -- every tab shares one pid, so pid-ancestry can't (see winterm.py).
         # None until the first hook event: click then just raises the window.
         self._tab_title = None
+        # Which project this session is in. A JetBrains IDE runs every open
+        # project in ONE process, so pid-ancestry can name the IDE but not the
+        # window -- click-to-focus needs this to pick ours (see
+        # platform/jetbrains.py). Read from the transcript now so a pet
+        # attached mid-session can already aim; hook events refresh it.
+        self._cwd = jetbrains.cwd_from_transcript(session_id)
+        self.project = jetbrains.project_name(self._cwd)
         self._companions = []                # agent followers, one per running agent
         self._departing = []                 # finished agents' companions waving goodbye
         self._throw_trail = []               # main-pet snapshots replayed by companions
@@ -765,7 +773,8 @@ class Pet(QWidget):
                     # from outside the process without these.
                     conn.sendall((json.dumps(
                         {"pet": hostinfo.BANNER_MARK, "session": self.session_id,
-                         "state": self.claude_state, "tab": self._tab_title}
+                         "state": self.claude_state, "tab": self._tab_title,
+                         "project": self.project}
                     ) + "\n").encode())
                 except OSError:
                     pass
@@ -825,6 +834,10 @@ class Pet(QWidget):
         title = ev.get("title")
         if title:
             self._tab_title = title
+        cwd = ev.get("cwd")
+        if cwd and cwd != self._cwd:
+            self._cwd = cwd                  # authoritative; beats the transcript scan
+            self.project = jetbrains.project_name(cwd)
         self.engine.handle(ev, time.monotonic())
         now = time.monotonic()
         was_idle = self.claude_state in ("idle", "sleeping")
@@ -874,6 +887,7 @@ class Pet(QWidget):
 
             "following": self._follow,
             "tab_title": self._tab_title,        # terminal tab we click-focus
+            "project": self.project,             # project window we click-focus
             "contained": self._contain.wid if self._contain else None,
             "companions": len(self._companions),
             "social": self._social_act,          # 현재 소셜 act or None
@@ -2337,6 +2351,8 @@ class Pet(QWidget):
 
     def _menu(self, gpos):
         m = QMenu()
+        if self.project:
+            m.addSection(self.project)
         a_follow = QAction(self.ui["follow"], m, checkable=True)
         a_follow.setChecked(self._follow)
         m.addAction(a_follow)
@@ -2525,6 +2541,8 @@ class Pet(QWidget):
         # reads live state each time it opens, and _toggle_* guard on them.
         if sys.platform != "darwin":
             m = QMenu()
+            if self.project:
+                m.addSection(self.project)
             self._act_follow = QAction(self.ui["follow"], m, checkable=True)
             m.addAction(self._act_follow)
             self._act_follow.triggered.connect(self._toggle_follow)
@@ -2566,6 +2584,17 @@ class Pet(QWidget):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._activate_claude()
 
+    def _who(self):
+        """'claudlet · <project> — <state>': which session this pet speaks for.
+
+        With one pet per project there is otherwise nothing on screen that says
+        which is which -- they are identical sprites in a dock row.
+        """
+        state = self.labels.get(self.claude_state, self.claude_state)
+        if not self.project:
+            return "claudlet — " + state
+        return "claudlet · %s — %s" % (self.project, state)
+
     def _update_tray_icon(self, force=False):
         tray = getattr(self, "tray", None)
         if tray is None:
@@ -2575,7 +2604,9 @@ class Pet(QWidget):
             return
         self._tray_state = st
         tray.setIcon(self._state_icon(st))
-        tray.setToolTip("claudlet — " + self.labels.get(st, st))
+        who = self._who()
+        tray.setToolTip(who)
+        self.setToolTip(who)             # hovering the pet itself answers it too
 
     def _state_icon(self, state):
         """Render one representative frame of `state` into a tray QIcon."""
@@ -2708,6 +2739,10 @@ class Pet(QWidget):
             return
         target = geom.find_focus_target(self._ancestor_pids,
                                         hostinfo.win_classes(self.host))
+        if self._focus_jetbrains_project(geom, target):
+            return                       # our project window is up; a JetBrains
+                                         # terminal tab isn't a Windows Terminal
+                                         # tab, so skip the UIA pass below
         if target:
             geom.activate_hwnd(target)
         # ...then switch to OUR tab. Windows Terminal runs every tab in one
@@ -2715,6 +2750,38 @@ class Pet(QWidget):
         # tab was last active -- the same "two sessions -> only the first tab
         # shows" problem _konsole_focus_tab solves on KDE.
         self._winterm_focus_tab()
+
+    def _focus_jetbrains_project(self, geom, target):
+        """Raise THIS session's JetBrains project window; True if we did.
+
+        The IDE keeps every open project in one process, so `target` is only as
+        specific as its pid: with four projects open, all four pets would raise
+        whichever window EnumWindows reached first. Re-enumerate that process's
+        windows and let jetbrains.pick_window read the project off their titles.
+        Returns False whenever it can't be sure, leaving the caller's pid target
+        to act as before.
+        """
+        if self.host != "jetbrains" or not self._cwd:
+            return False
+        pid = geom.window_pid(target) if target else None
+        if pid is None:
+            # no pid-pinned window (the IDE's own window may be minimized, or
+            # the pet ran without --claude-pid): the ancestor chain still names
+            # the IDE process, so take the first ancestor that owns windows.
+            for cand in self._ancestor_pids:
+                if geom.pid_window_titles(cand):
+                    pid = cand
+                    break
+        # pid None: nothing in the ancestor chain owns a window either, which
+        # is the norm for a pet started by hand (`/claudlet` in a session that
+        # predates the hooks) -- its launching shell is long gone. Fall back to
+        # every window on the desktop: the title match is what identifies the
+        # window anyway, and it is keyed on OUR project's own folder and path,
+        # so it is not the blind class-substring guess win_classes avoids.
+        hwnd = jetbrains.focus(self._cwd,
+                               lambda: geom.pid_window_titles(pid),
+                               geom.activate_hwnd)
+        return hwnd is not None
 
     def _winterm_focus_tab(self):
         """Best-effort: select THIS session's Windows Terminal tab over UI

@@ -29,6 +29,12 @@ All `bin/*` tools are Python, so they run wherever Python does.
   session's tab**: Windows Terminal (like KDE's Konsole) runs every tab in one
   process, so raising the window alone can't tell two sessions apart. The tab is
   matched by its title; when no tab matches, the window is simply raised.
+  A JetBrains IDE has the same shape one level up — every open **project** lives in
+  one process — so there the pet picks its own project's window, matched on the
+  project folder in the window title.
+- **Hover for a name** — with one pet per project, the tooltip (and the top of the
+  right-click menu) says which one you are looking at: `claudlet · my-project — 작업중`.
+  The project comes from the session's own working directory.
 - **Hover back-and-forth over it** to pet it — hearts pop and it grins; even a
   sleeping one perks up.
 - **Companions play together** — when idle with agent companions around, they
