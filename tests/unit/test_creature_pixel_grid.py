@@ -72,10 +72,11 @@ def _opaque_pixels(state, frame, **kw):
 
 
 def test_bob_steps_whole_pixels_so_the_silhouette_does_not_breathe():
-    # These states bob but never tilt, so the only thing changing between frames
-    # is the shared vertical offset. A fractional offset re-split every art pixel
-    # and the opaque area wobbled by ~40px; quantised, the area must hold.
-    for state, frames in (("idle", range(0, 34)), ("work_computer", range(0, 30))):
+    # These states bob but never tilt and move no limbs, so the only thing
+    # changing between frames is the shared vertical offset. A fractional offset
+    # re-split every art pixel and the opaque area wobbled by ~40px; quantised,
+    # the area must hold. (work_computer no longer qualifies: its front legs tap.)
+    for state, frames in (("idle", range(0, 34)), ("work_web", range(0, 30))):
         areas = {_opaque_pixels(state, f) for f in frames}
         assert len(areas) == 1, "%s: silhouette area varied %s" % (state, sorted(areas))
 

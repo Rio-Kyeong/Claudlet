@@ -255,7 +255,8 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         tilt = _sin(frame, 12, 2.0)
         baseline_lift = 0.8 * droop                        # trudges when tired
     elif state == "work_computer":
-        bob = _sin(frame, 30, 0.3)                # gentle head bob while typing
+        bob = _sin(frame, 26, 0.7)                # head bob while typing
+        front_tap = abs(_sin(frame, 7, 0.9))      # front legs tapping the keys
         eyes = "focus"
         prop = "laptop"
     elif state == "work_search":
@@ -265,15 +266,15 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         eyes = "focus"
         prop = "magnify"
     elif state == "work_web":
-        bob = _sin(frame, 40, 0.3)
+        bob = _sin(frame, 30, 0.7)
         eyes = "up"
         prop = "phone"
     elif state == "work_agent":
-        bob = _sin(frame, 34, 0.4)
+        bob = _sin(frame, 28, 0.8)
         eyes = "open"
         prop = "clones"
     elif state == "work_skill":
-        bob = _sin(frame, 28, 0.5)
+        bob = _sin(frame, 24, 0.8)
         eyes = "happy"
         prop = "hat"
     elif state == "autopilot":
@@ -294,8 +295,8 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         eyes = "shades_glint" if state == "auto_skill" else "shades"
         prop = _AUTO_PROP.get(state)
     elif state == "thinking":
-        bob = _sin(frame, 46, 0.35)
-        tilt = _sin(frame, 92, 3.0)               # slow head cant, "hmm"
+        bob = _sin(frame, 34, 0.8)
+        tilt = _sin(frame, 40, 5.0)               # head cant, "hmm"
         eyes = "up"
         prop = "speech"
     elif state == "attention":
@@ -310,13 +311,13 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         # calmly waiting on the user to answer (a question or plan approval):
         # patient bob, slow curious head cant, attentive eyes, "응?" bubble.
         # distinct from `attention` (a jumpy permission alert).
-        bob = _sin(frame, 40, 0.4)
-        tilt = _sin(frame, 70, 2.5)
+        bob = _sin(frame, 34, 0.8)
+        tilt = _sin(frame, 50, 3.5)
         eyes = "wide"
         prop = "speech"
     elif state == "error":
-        tilt = -16
-        bob = 1.5
+        tilt = -16 + _sin(frame, 5, 4.0)          # rattled, not just leaning
+        bob = 1.5 + abs(_sin(frame, 10, 0.8))
         baseline_lift = -1.0
         eyes = "x"
         prop = "speech"
@@ -334,7 +335,7 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         eyes = "happy"
         prop = "speech"
     elif state == "sleeping":
-        bob = _sin(frame, 50, 0.4)
+        bob = _sin(frame, 44, 0.9)                # slow, deep breathing
         eyes = "sleep"
         prop = "zzz"
     elif state == "held":
@@ -367,16 +368,16 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         legphase = 0.5                           # legs together/tucked
         eyes = "happy"
     elif state == "wave":
-        bob = _sin(frame, 30, 0.4)
-        tilt = _sin(frame, 20, 4.0)              # rock while waving
+        bob = _sin(frame, 24, 0.7)
+        tilt = _sin(frame, 18, 6.0)              # rock while waving
         eyes = "happy"
     elif state == "sing":
-        bob = _sin(frame, 22, 0.6)
+        bob = _sin(frame, 20, 1.0)
         tilt = _sin(frame, 22, 5.0)              # big sway to the beat
         eyes = "happy"
         prop = "note"
     elif state == "juggle":
-        bob = _sin(frame, 18, 0.4)
+        bob = _sin(frame, 16, 0.8)
         eyes = "wide"
         prop = "balls"
     elif state == "float":
@@ -510,7 +511,7 @@ def draw_creature(p, ox, oy, u, state, frame, facing=1, visor=None, cap=None,
         px(17.3, 4.6, 2.1, 1.9, ORANGE_D)
     elif arm == "wave":
         # left arm down at side, right arm raised and swinging (the wave)
-        wv = _sin(frame, 16, 1.4)
+        wv = _sin(frame, 12, 2.2)
         px(1.0, 7.9, 2.2, 1.9, ORANGE_D)                 # left arm at side
         px(17.3, 3.4 + wv, 2.1, 1.9, ORANGE_D)           # right arm up, waving
     elif arm == "tap":
