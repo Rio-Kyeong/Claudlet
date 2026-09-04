@@ -83,7 +83,7 @@ def test_auto_variant_decays_when_quiet():
     e = StateEngine()
     e.handle(_pre("Edit", pm="auto"), 0.0)
     assert e.display_state(1.0) == "auto_computer"
-    assert e.display_state(1000.0) in ("idle", "sleeping")
+    assert e.display_state(2000.0) in ("idle", "sleeping")   # open tool: TOOL_TIMEOUT
 
 
 # --- auto_active(): visor persists across states while in an auto mode ---

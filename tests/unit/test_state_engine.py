@@ -40,8 +40,9 @@ def test_custom_target_gets_work_priority_and_decays():
     e = StateEngine(tool_states={"Grep": "sing"})
     e.handle({"event": "PreToolUse", "session": "a", "tool_name": "Grep"}, 0.0)
     assert e.display_state(1.0) == "sing"
-    # WORK_TIMEOUT decay (then straight to sleeping, since it's also past SLEEP)
-    assert e.display_state(1000.0) in ("idle", "sleeping")
+    # decay (then straight to sleeping, since it's also past SLEEP). The tool
+    # never closed, so the horizon is TOOL_TIMEOUT rather than WORK_TIMEOUT.
+    assert e.display_state(2000.0) in ("idle", "sleeping")
 
 
 def test_tool_to_state_known_and_fallback():
@@ -227,12 +228,13 @@ def test_sessionend_drops_session():
 
 
 def test_work_state_times_out_when_no_stop_fires():
-    # user interrupts (ESC) mid-Bash: no Stop, no further events
+    # user interrupts (ESC) after the tool closed: no Stop, no further events
     e = StateEngine()
     e.handle({"event": "PreToolUse", "session": "a", "tool_name": "Bash"}, now=0.0)
+    e.handle({"event": "PostToolUse", "session": "a", "tool_name": "Bash"}, now=1.0)
     assert e.display_state(now=10.0) == "work_computer"
     # after WORK_TIMEOUT of silence it falls back and (being long-quiet) sleeps
-    assert e.display_state(now=121.0) == "sleeping"
+    assert e.display_state(now=122.0) == "sleeping"
 
 
 def test_thinking_times_out_when_no_stop_fires():
@@ -438,3 +440,62 @@ def test_parent_activity_during_grace_does_not_block_departure():
     e.handle(_ev("PreToolUse", tool_name="Edit"), now=2.5)
     e.display_state(now=10.0)
     assert e.agents_active() == 0                             # departed on schedule
+
+
+# --- a long tool call keeps the work motion up -------------------------------
+# No hook fires while a tool runs: PreToolUse lands before it starts, PostToolUse
+# only after it finishes. Ageing on last_event alone dropped the pet to idle in
+# the middle of a long Bash/build, so an open tool suspends the short timeout.
+
+
+def test_long_running_tool_keeps_working():
+    e = StateEngine()
+    e.handle(_ev("PreToolUse", tool_name="Bash"), now=0.0)
+    assert e.display_state(now=600.0) == "work_computer"
+
+
+def test_work_times_out_once_the_tool_closes():
+    e = StateEngine()
+    e.handle(_ev("PreToolUse", tool_name="Bash"), now=0.0)
+    e.handle(_ev("PostToolUse", tool_name="Bash"), now=5.0)
+    assert e.display_state(now=10.0) == "work_computer"
+    assert e.display_state(now=130.0) in ("idle", "sleeping")
+
+
+def test_thinking_with_no_tool_open_still_times_out():
+    e = StateEngine()
+    e.handle(_ev("UserPromptSubmit"), now=0.0)
+    assert e.display_state(now=130.0) in ("idle", "sleeping")
+
+
+def test_open_tool_still_gives_up_eventually():
+    # ESC during a long tool leaves the tool open forever; a runaway net releases
+    e = StateEngine()
+    e.handle(_ev("PreToolUse", tool_name="Bash"), now=0.0)
+    assert e.display_state(now=1900.0) in ("idle", "sleeping")
+
+
+def test_parallel_tools_hold_until_the_last_one_closes():
+    e = StateEngine()
+    e.handle(_ev("PreToolUse", tool_name="Bash"), now=0.0)
+    e.handle(_ev("PreToolUse", tool_name="Read"), now=0.1)
+    e.handle(_ev("PostToolUse", tool_name="Read"), now=1.0)
+    assert e.display_state(now=600.0) in ("work_computer", "work_search")
+    e.handle(_ev("PostToolUse", tool_name="Bash"), now=601.0)
+    assert e.display_state(now=731.0) in ("idle", "sleeping")
+
+
+def test_turn_boundaries_clear_a_leaked_open_tool():
+    # a tool whose PostToolUse never arrived must not pin the NEXT turn: the
+    # thinking that follows has no tool open, so it keeps the short timeout
+    for closer in ("Stop", "SessionStart"):
+        e = StateEngine()
+        e.handle(_ev("PreToolUse", tool_name="Bash"), now=0.0)
+        e.handle(_ev(closer), now=1.0)
+        e.handle(_ev("UserPromptSubmit"), now=2.0)
+        assert e.display_state(now=10.0) == "thinking", closer
+        assert e.display_state(now=130.0) in ("idle", "sleeping"), closer
+    e = StateEngine()                       # UserPromptSubmit closes it itself
+    e.handle(_ev("PreToolUse", tool_name="Bash"), now=0.0)
+    e.handle(_ev("UserPromptSubmit"), now=1.0)
+    assert e.display_state(now=130.0) in ("idle", "sleeping")

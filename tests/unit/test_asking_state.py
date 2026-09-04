@@ -42,9 +42,10 @@ def test_asking_is_overridable():
 
 
 def test_asking_decays_when_left_hanging():
-    # if the user never answers, the pet shouldn't be stuck asking forever
+    # if the user never answers, the pet shouldn't be stuck asking forever.
+    # The question's PostToolUse never came, so it decays on TOOL_TIMEOUT.
     e = StateEngine()
     e.handle({"event": "PreToolUse", "session": "a",
               "tool_name": "AskUserQuestion"}, 0.0)
     assert e.display_state(1.0) == "asking"
-    assert e.display_state(1000.0) in ("idle", "sleeping")
+    assert e.display_state(2000.0) in ("idle", "sleeping")

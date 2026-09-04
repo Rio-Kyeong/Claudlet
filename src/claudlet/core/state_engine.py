@@ -95,6 +95,10 @@ COMPANION_DEPART_GRACE = 3.0   # linger this long after the background_tasks
                                # vanishing a beat before the bottom line clears
 WORK_TIMEOUT = 120.0   # work_*/thinking with no events this long -> assume the
                        # turn ended without a Stop (e.g. user interrupt) -> idle
+TOOL_TIMEOUT = 1800.0  # ...but no hook fires WHILE a tool runs: PreToolUse lands
+                       # before it starts and PostToolUse only after it ends, so
+                       # a long build read as an abandoned turn and the pet went
+                       # idle mid-work. An open tool gets this net instead.
 
 
 def tool_to_state(tool_name):
@@ -107,7 +111,7 @@ def tool_to_state(tool_name):
 
 class _Session:
     __slots__ = ("state", "since", "expiry", "last_event", "pending", "agents",
-                 "agent_state", "agent_gone_since")
+                 "agent_state", "agent_gone_since", "tools_open")
 
     def __init__(self, now):
         self.state = "idle"
@@ -118,6 +122,7 @@ class _Session:
         self.agents = 0        # open subagent windows (PreToolUse Agent .. SubagentStop)
         self.agent_state = None  # subagent's current activity, for the companion
         self.agent_gone_since = None  # ts the snapshot emptied (depart-grace timer)
+        self.tools_open = 0    # tool calls started whose PostToolUse hasn't come
 
     def set_state(self, state, now):
         self.state = state
@@ -170,6 +175,15 @@ class StateEngine:
         if s is None:
             s = self.sessions[sid] = _Session(now)
         s.last_event = now
+        # every tool counts, and Pre/Post alike: the pair is symmetric, so
+        # skipping one kind here would drive the count negative and close a
+        # sibling tool's window early.
+        if name == "PreToolUse":
+            s.tools_open += 1
+        elif name == "PostToolUse":
+            s.tools_open = max(0, s.tools_open - 1)
+        elif name in ("SessionStart", "UserPromptSubmit", "Stop", "StopFailure"):
+            s.tools_open = 0        # turn boundary: a lost PostToolUse ends here
 
         if name == "SessionStart":
             s.agents = 0                       # fresh session -> no open agents
@@ -300,10 +314,13 @@ class StateEngine:
         if s.expiry is not None and now >= s.expiry:
             s.set_state("idle", now)
         # work/thinking gone quiet for a long time: no Stop ever came (e.g. the
-        # user interrupted with ESC), so fall back to calm idle.
+        # user interrupted with ESC), so fall back to calm idle -- unless a
+        # tool is still running, which is silent by nature.
+        limit = TOOL_TIMEOUT if s.tools_open else WORK_TIMEOUT
         if (s.state in self._work_like or s.state in ("thinking", "asking")) and \
-           (now - s.last_event) >= WORK_TIMEOUT:
+           (now - s.last_event) >= limit:
             s.set_state("idle", now)
+            s.tools_open = 0
         # calm idle falls asleep after a long quiet spell
         if s.state == "idle" and (now - s.last_event) >= SLEEP_TIMEOUT:
             s.state = "sleeping"
