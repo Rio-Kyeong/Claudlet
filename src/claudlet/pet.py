@@ -451,7 +451,8 @@ class ZoneOverlay(QWidget):
 
 
 class Pet(QWidget):
-    def __init__(self, session_id="default", host="unknown", claude_pid=0):
+    def __init__(self, session_id="default", host="unknown", claude_pid=0,
+                 cwd=None):
         super().__init__()
         # The KWin geom feed and geom.EXCLUDE_CLASSES filter our own windows
         # out by resourceClass "claudlet", which Qt derives from the application
@@ -525,7 +526,10 @@ class Pet(QWidget):
         # platform/jetbrains.py), and the "project" palette colours the pet by
         # it. Read from the transcript now so a pet attached mid-session already
         # knows; hook events refresh it.
-        self._cwd = jetbrains.cwd_from_transcript(session_id)
+        # A brand-new session has no transcript yet, so the launcher hands the
+        # project over directly; the transcript is the fallback for a pet
+        # attached later by hand.
+        self._cwd = cwd or jetbrains.cwd_from_transcript(session_id)
         self.project = jetbrains.project_name(self._cwd)
         self._palette_cfg = os.environ.get("CLAUDLET_PALETTE") or cfg.get("palette", "auto")
         self._project_palettes = cfg.get("project_palettes") or {}
@@ -3014,6 +3018,9 @@ def main():
     ap.add_argument("--session", default="default")
     ap.add_argument("--host", default="unknown")
     ap.add_argument("--claude-pid", type=int, default=0)
+    ap.add_argument("--cwd", default=None,
+                    help="the session's project directory (the hook knows it "
+                         "before any transcript exists)")
     args, _ = ap.parse_known_args()
 
     # One pet per session: hold an exclusive lock. If another pet already holds
@@ -3053,7 +3060,8 @@ def main():
             macos.set_accessory_policy()
         except Exception:
             pass                              # never block startup over cosmetics
-    pet = Pet(session_id=args.session, host=args.host, claude_pid=args.claude_pid)
+    pet = Pet(session_id=args.session, host=args.host,
+              claude_pid=args.claude_pid, cwd=args.cwd)
     pet._lock_fd = lock_fd                    # keep the fd (and the lock) alive
     # always tear down the KWin geom script — including on `kill`/SIGTERM, which
     # otherwise skips _cleanup and leaks a script that keeps pushing geometry.

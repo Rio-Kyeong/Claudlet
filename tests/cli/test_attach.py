@@ -1,3 +1,5 @@
+import os
+
 from claudlet.cli import attach
 
 
@@ -29,7 +31,8 @@ def test_attach_launches_when_dead(monkeypatch):
     launched = []
     monkeypatch.setattr(attach, "_launch", lambda args: launched.append(args))
     assert attach.main(["--session", "s1"]) == 0
-    assert launched == [["--session", "s1", "--host", "konsole"]]
+    assert launched == [["--session", "s1", "--host", "konsole",
+                         "--cwd", os.getcwd()]]
 
 
 def test_attach_session_from_env(monkeypatch):
@@ -39,4 +42,23 @@ def test_attach_session_from_env(monkeypatch):
     launched = []
     monkeypatch.setattr(attach, "_launch", lambda args: launched.append(args))
     attach.main([])                                # no --session -> use env
-    assert launched == [["--session", "envsid", "--host", "code"]]
+    assert launched == [["--session", "envsid", "--host", "code",
+                         "--cwd", os.getcwd()]]
+
+
+def test_attach_hands_the_project_directory_to_the_pet(monkeypatch):
+    # a pet attached in a brand-new session has no transcript to read the project
+    # from; claudlet-attach runs in that session's directory, so it knows
+    import os
+    from claudlet.cli import attach as A
+
+    launched = []
+    monkeypatch.setattr(A, "_launch", launched.append)
+    monkeypatch.setattr(A.hostinfo, "pet_alive", lambda _sid: False)
+    monkeypatch.setattr(A.hostinfo, "detect_host", lambda: "jetbrains")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-x")
+
+    assert A.main([]) == 0
+    argv = launched[0]
+    assert "--cwd" in argv
+    assert argv[argv.index("--cwd") + 1] == os.getcwd()

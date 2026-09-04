@@ -48,7 +48,12 @@ def build_message(argv, data, title=None):
         msg["title"] = title
     # cwd tells the pet which project it speaks for: it labels the pet and
     # picks its window out of a JetBrains IDE (one process, every project).
-    for key in ("cwd", "tool_name", "notification_type", "error_type",
+    # cwd tells the pet which project it speaks for: it labels the pet, colours
+    # it, and picks its window out of a JetBrains IDE (one process, every
+    # project). os.getcwd() is the fallback because the hook runs in the
+    # session's working directory, so it holds even if the payload omits it.
+    msg["cwd"] = data.get("cwd") or os.getcwd()
+    for key in ("tool_name", "notification_type", "error_type",
                 "permission_mode"):
         val = data.get(key)
         if val:
@@ -225,7 +230,7 @@ def _proc_info(pid):
         return None
 
 
-def _launch_pet(session_id, host):
+def _launch_pet(session_id, host, cwd=None):
     # Give the reaper the real Claude Code pid, not our transient shell parent.
     claude_pid = resolve_claude_pid(os.getppid(), _proc_info)
     # Launch the pet as `python -m claudlet` with THIS interpreter so it works
@@ -239,9 +244,16 @@ def _launch_pet(session_id, host):
     env = dict(os.environ)
     src_dir = os.path.dirname(os.path.dirname(os.path.abspath(hostinfo.__file__)))
     env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
-    subprocess.Popen(
-        [sys.executable, "-m", "claudlet", "--session", session_id,
-         "--host", host, "--claude-pid", str(claude_pid)], env=env, **kw)
+    argv = [sys.executable, "-m", "claudlet", "--session", session_id,
+            "--host", host, "--claude-pid", str(claude_pid)]
+    # The project the pet belongs to, handed over at birth. A brand-new
+    # session has no transcript on disk yet, so the pet cannot look it up --
+    # it would come up nameless and colourless in exactly the case that
+    # matters, the first session in a new project. The hook runs in the
+    # session's own working directory, so it already knows.
+    if cwd:
+        argv += ["--cwd", cwd]
+    subprocess.Popen(argv, env=env, **kw)
 
 
 def _send(port, payload):
@@ -305,7 +317,8 @@ def main():
             # dropping this event on a timing coincidence.
             had_port = hostinfo.read_session_port(session_id) is not None
             if not hostinfo.pet_alive(session_id):
-                _launch_pet(session_id, hostinfo.detect_host())
+                _launch_pet(session_id, hostinfo.detect_host(),
+                            data.get("cwd") or os.getcwd())
                 launched_fresh = not had_port
         except Exception:
             pass

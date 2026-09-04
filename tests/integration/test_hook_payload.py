@@ -269,6 +269,9 @@ def test_forwards_cwd_so_the_pet_knows_its_project():
     assert msg["cwd"] == r"C:\Users\YYC\IdeaProjects\thing"
 
 
-def test_cwd_omitted_when_the_payload_has_none():
+def test_cwd_falls_back_to_the_hooks_own_directory():
+    # the hook runs in the session's working directory, so this holds even if the
+    # payload omits cwd -- and without it a brand-new session's pet, which has no
+    # transcript to read yet, would stay nameless
     msg = json.loads(mod.build_message(["claudlet-hook", "Stop"], {"session_id": "s1"}))
-    assert "cwd" not in msg
+    assert msg["cwd"] == os.getcwd()

@@ -69,7 +69,10 @@ def main(argv=None):
         print("already attached to session %s (host=%s)" % (session_id, host))
         return 0
 
-    _launch(["--session", session_id, "--host", host])
+    # hand over the project directory: a pet attached in a brand-new session
+    # has no transcript to read it from yet, and `claudlet-attach` runs in
+    # that session's own directory.
+    _launch(["--session", session_id, "--host", host, "--cwd", os.getcwd()])
     print("attached to session %s (host=%s)" % (session_id, host))
     return 0
 

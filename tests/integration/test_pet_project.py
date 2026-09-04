@@ -1,6 +1,8 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
+
 from claudlet.platform import jetbrains
 
 from harness import pet, send_hook  # noqa: F401  (`pet` used as a fixture)
@@ -133,3 +135,29 @@ def test_falls_back_to_an_ancestor_that_owns_windows(pet):
 
 def test_project_name_helper_matches_what_the_pet_stores(pet):
     assert jetbrains.project_name(CWD) == "bnk-approval-fe"
+
+
+def test_cwd_given_at_launch_beats_the_transcript(monkeypatch):
+    # a brand-new session has no transcript on disk, so the launcher's --cwd is
+    # the only thing that can name the project at startup
+    from claudlet import pet as P
+
+    monkeypatch.setattr(jetbrains, "cwd_from_transcript",
+                        lambda *a, **k: pytest.fail("must not be consulted"))
+    p = P.Pet(session_id="brand-new", host="jetbrains", cwd=CWD)
+    try:
+        assert p.project == "bnk-approval-fe"
+        assert p._cwd == CWD
+    finally:
+        p._cleanup()
+
+
+def test_without_cwd_it_still_reads_the_transcript(monkeypatch):
+    from claudlet import pet as P
+
+    monkeypatch.setattr(jetbrains, "cwd_from_transcript", lambda *a, **k: CWD)
+    p = P.Pet(session_id="older", host="jetbrains")
+    try:
+        assert p.project == "bnk-approval-fe"
+    finally:
+        p._cleanup()
