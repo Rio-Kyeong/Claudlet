@@ -86,7 +86,12 @@ def _latest_upstream_ref(repo):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # ASCII only: a Windows console on a Korean locale is cp949, and argparse
+    # writing an em dash there raises UnicodeEncodeError instead of printing help
+    ap = argparse.ArgumentParser(
+        prog="claudlet-sync",
+        description="Update this customised claudlet build (fork branch "
+                    "'%s') without losing the customisations." % BRANCH)
     ap.add_argument("--ref", help="upstream ref to merge (default: newest release tag)")
     ap.add_argument("--develop", action="store_true",
                     help="merge upstream/develop instead of the newest release")

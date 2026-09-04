@@ -50,3 +50,19 @@ def test_merge_conflict_stops_before_installing(monkeypatch, tmp_path):
     monkeypatch.setattr(S.subprocess, "run", lambda *a, **k: Fail())
     assert S.main([]) == 2
     assert installed == []
+
+
+def test_help_text_is_ascii_only():
+    # a Korean-locale Windows console is cp949; argparse writing an em dash there
+    # raises UnicodeEncodeError instead of printing the help
+    import argparse
+    import contextlib
+    import io as _io
+
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        with contextlib.suppress(SystemExit):
+            S.main(["--help"])
+    text = buf.getvalue()
+    assert text
+    text.encode("cp949")        # raises if any character is outside cp949
