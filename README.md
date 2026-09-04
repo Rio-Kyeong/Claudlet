@@ -1,5 +1,9 @@
 # claudlet 🐾
 
+> **This is a customised fork.** Install from the `custom` branch, not PyPI:
+> `pipx install --force "git+https://github.com/Rio-Kyeong/Claudlet@custom"`
+> — see **[FORK.md](FORK.md)** for what it adds and how to update.
+
 **English** | [한국어](README.ko.md)
 
 [![PyPI](https://img.shields.io/pypi/v/claudlet)](https://pypi.org/project/claudlet/)

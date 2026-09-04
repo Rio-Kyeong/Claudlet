@@ -1,5 +1,9 @@
 # claudlet 🐾
 
+> **커스텀 fork 입니다.** PyPI 가 아니라 `custom` 브랜치에서 설치하세요:
+> `pipx install --force "git+https://github.com/Rio-Kyeong/Claudlet@custom"`
+> — 무엇이 다른지와 업데이트 방법은 **[FORK.md](FORK.md)** 참고.
+
 [English](README.md) | **한국어**
 
 [![PyPI](https://img.shields.io/pypi/v/claudlet)](https://pypi.org/project/claudlet/)
