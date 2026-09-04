@@ -116,10 +116,10 @@ PALETTES = {
 }
 
 
-# Per-project colouring: 12 hues far enough apart to tell at a glance, times two
-# tones (a plain one and a deeper, less saturated one). Hue alone collided too
-# readily -- 12 buckets over a handful of projects pairs some of them up, and two
-# same-coloured pets in one dock row defeat the point. The tone splits those.
+# Per-project colouring: 12 hues far enough apart to tell at a glance, times
+# three tones. Hue alone collided too readily -- 12 buckets over a handful of
+# projects pairs some of them up, and two same-coloured pets in one dock row
+# defeat the point. The tone splits those; project_palettes settles the rest.
 _PROJECT_HUES = tuple(range(0, 360, 30))
 # (saturation, lightness) of the body: plain, deep, pale
 _PROJECT_TONES = ((0.55, 0.55), (0.38, 0.44), (0.45, 0.68))
