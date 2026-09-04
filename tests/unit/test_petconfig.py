@@ -12,7 +12,7 @@ def _write(tmp, obj):
 
 EMPTY = {"tool_states": {}, "event_states": {}, "raw_events": {}, "lang": "auto",
          "roam_area": None, "no_go": [], "palette": "auto",
-         "project_palettes": {},
+         "project_palettes": {}, "show_project": True,
          "dock": petconfig.default_dock()}
 
 

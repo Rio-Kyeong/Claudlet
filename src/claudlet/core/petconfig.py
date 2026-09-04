@@ -106,6 +106,8 @@ def _clean(raw):
     if palette not in _PALETTE_NAMES:
         palette = "auto"
     # project -> body colour, pinning a project whose hashed colour collided
+    show_project = raw.get("show_project")
+    show_project = True if show_project is None else bool(show_project)
     project_palettes = raw.get("project_palettes")
     if not isinstance(project_palettes, dict):
         project_palettes = {}
@@ -133,6 +135,7 @@ def _clean(raw):
             "raw_events": raw_events, "lang": lang,
             "roam_area": roam_area, "no_go": no_go, "palette": palette,
             "project_palettes": project_palettes,
+            "show_project": show_project,
             "dock": _clean_dock(raw.get("dock"))}
 
 
@@ -180,7 +183,7 @@ def resolve_palette(config_value, roll, pick=0.0):
 def _empty_config():
     return {"tool_states": {}, "event_states": {}, "raw_events": {},
             "lang": "auto", "roam_area": None, "no_go": [], "palette": "auto",
-            "project_palettes": {},
+            "project_palettes": {}, "show_project": True,
             "dock": default_dock()}
 
 

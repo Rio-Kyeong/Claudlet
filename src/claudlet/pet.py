@@ -529,6 +529,7 @@ class Pet(QWidget):
         self.project = jetbrains.project_name(self._cwd)
         self._palette_cfg = os.environ.get("CLAUDLET_PALETTE") or cfg.get("palette", "auto")
         self._project_palettes = cfg.get("project_palettes") or {}
+        self._show_project = cfg.get("show_project", True)
         _rng = random.Random()
         self._palette_roll = (_rng.random(), _rng.random())
         self._palette = self._resolve_palette()
@@ -555,6 +556,12 @@ class Pet(QWidget):
         # _update_host_wid도 조기 반환해 클릭이 "창은 올라오는데 탭은 그대로"가
         # 된다. 펫을 띄운 셸이 곧 그 탭의 셸이므로 자기 조상이 정확히 맞다.
         self._ancestor_pids = self._proc_ancestors(claude_pid or os.getpid())
+        # ...but never OURSELVES. Without --claude-pid the chain starts at the
+        # pet's own pid, and the pet owns a window, so the pid lookup matched it:
+        # every click raised the pet instead of the host, and the JetBrains
+        # project match then ran over the pet's own five windows and found
+        # nothing. The host is always an ancestor, never us.
+        self._ancestor_pids.discard(os.getpid())
         self._host_wid = None                # internalId of our host window (focus)
         # Terminal tab title, refreshed by every hook event. On Windows this is
         # the ONLY thing that can pick our tab out of a Windows Terminal window
@@ -2185,7 +2192,41 @@ class Pet(QWidget):
                         palette=self._palette, happy=petted, pocket=pocket, gaze=gaze)
         if petted:
             self._draw_hearts(p, 1.0 - (self._pet_react_until - now) / PET_REACT_SEC)
+        if self._show_project and not getattr(self, "_in_notch", False):
+            self._draw_project_label(p)
         p.end()
+
+    def _draw_project_label(self, p):
+        """Stamp the project name under the feet, inside the existing window.
+
+        The colour alone says which pet is which only once you have learned the
+        colours; the name says it outright. It fits without resizing anything:
+        the creature's feet end around art row 15.8 of 17, which leaves ~16px
+        below them at U=5, and the window must keep its size or the dock anchor
+        and the floor line both move.
+
+        Drawn as light text with a dark halo so it stays readable over whatever
+        the pet happens to be standing on.
+        """
+        if not self.project:
+            return
+        from PyQt6.QtGui import QFont, QFontMetrics
+        feet = (PAD_Y + 15.8) * U
+        band = self.h - feet
+        if band < 9:
+            return
+        f = QFont()
+        f.setPixelSize(max(8, min(11, int(band) - 3)))
+        f.setBold(True)
+        p.setFont(f)
+        text = QFontMetrics(f).elidedText(self.project, Qt.TextElideMode.ElideMiddle,
+                                          self.w - 2)
+        box = QRectF(0, feet, self.w, band)
+        p.setPen(QColor(0, 0, 0, 190))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            p.drawText(box.translated(dx, dy), Qt.AlignmentFlag.AlignCenter, text)
+        p.setPen(QColor("#F5F0E8"))
+        p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
 
     def _draw_hearts(self, p, age):
         # 쓰다듬기 반응 하트. 창이 캐릭터에 꽉 차서 위 여백이 거의 없으므로 머리 양옆
