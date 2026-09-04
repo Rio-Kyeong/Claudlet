@@ -75,6 +75,51 @@ def _sessions_with_pets():
     return out
 
 
+def _handoff_script(sessions, restart):
+    """Write the reinstall step as a script that runs AFTER this process exits.
+
+    claudlet-sync runs from the pipx venv, so its own interpreter is
+    `venvs/claudlet/Scripts/python.exe` -- the file pipx has to replace. On
+    Windows that file is locked while we hold it, and pipx refuses with
+    "Permission denied ... Not removing existing venv". So the reinstall cannot
+    happen inside this process: it waits for our pid to disappear first.
+
+    Returns (script_path, log_path).
+    """
+    tmp = tempfile.mkdtemp(prefix="claudlet-reinstall-")
+    log = os.path.join(tmp, "reinstall.log")
+    src = "git+%s@%s" % (FORK, BRANCH)
+    attach = [["claudlet-attach", "--session", s] for s in sessions] if restart else []
+
+    if os.name == "nt":
+        lines = ["@echo off",
+                 'powershell -NoProfile -Command "Wait-Process -Id %d '
+                 '-ErrorAction SilentlyContinue" >nul 2>&1' % os.getpid(),
+                 '(', 'echo === reinstall ===',
+                 'pipx install --force "%s"' % src,
+                 "echo === hooks ===", "claudlet-install"]
+        lines += ["%s %s %s" % tuple(a) for a in attach]
+        lines += [') > "%s" 2>&1' % log]
+        path = os.path.join(tmp, "reinstall.cmd")
+        cmd = ["cmd", "/c", "start", "", "/min", path]
+    else:
+        lines = ["#!/bin/sh",
+                 "while kill -0 %d 2>/dev/null; do sleep 0.2; done" % os.getpid(),
+                 "{ echo '=== reinstall ==='",
+                 'pipx install --force "%s"' % src,
+                 "echo '=== hooks ==='", "claudlet-install"]
+        lines += [" ".join(a) for a in attach]
+        lines += ["} > '%s' 2>&1" % log]
+        path = os.path.join(tmp, "reinstall.sh")
+        cmd = ["/bin/sh", path]
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    if os.name != "nt":
+        os.chmod(path, 0o755)
+    return path, log, cmd
+
+
 def _latest_upstream_ref(repo):
     """The newest upstream release tag, or upstream/master if there are none."""
     _run(["git", "fetch", "--tags", "upstream"], cwd=repo)
@@ -141,19 +186,16 @@ def main(argv=None):
         n = _stop_pets()
         _say("stopped %d pet process(es)" % n)
 
-        _say("reinstalling from the fork")
-        _run(["pipx", "install", "--force", "git+%s@%s" % (FORK, BRANCH)],
-             capture=False, check=True)
-        _say("reinstalling hooks + skill")
-        _run(["claudlet-install"], capture=False, check=False)
-
-        if not args.no_restart:
-            for sid in sessions:
-                subprocess.run(["claudlet-attach", "--session", sid],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            _say("reattached %d pet(s)" % len(sessions))
-
-        _say("done. Restart your Claude Code sessions so they load the new hooks.")
+        _script, log, cmd = _handoff_script(sessions, not args.no_restart)
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+                         if os.name == "nt" else 0,
+                         start_new_session=(os.name != "nt"))
+        _say("reinstall handed off (it waits for this process to exit)")
+        _say("log: %s" % log)
+        _say("give it ~30s, then check `claudlet-version` and restart your "
+             "Claude Code sessions so they load the new hooks.")
         return 0
     except RuntimeError as exc:
         _say("failed: %s" % exc)

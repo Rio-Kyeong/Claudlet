@@ -66,3 +66,24 @@ def test_help_text_is_ascii_only():
     text = buf.getvalue()
     assert text
     text.encode("cp949")        # raises if any character is outside cp949
+
+
+def test_handoff_waits_for_this_process_before_reinstalling():
+    # claudlet-sync runs from the venv pipx must replace; on Windows that file is
+    # locked while we hold it, so the reinstall has to outlive us
+    import os as _os
+
+    path, log, cmd = S._handoff_script(["sess-a", "sess-b"], restart=True)
+    body = open(path, encoding="utf-8").read()
+    assert str(_os.getpid()) in body, body
+    assert "pipx install --force" in body
+    assert S.FORK in body and S.BRANCH in body
+    assert "claudlet-install" in body
+    assert body.count("claudlet-attach") == 2
+    assert log in body
+    assert cmd and path in cmd
+
+
+def test_handoff_can_skip_the_restart():
+    path, _log, _cmd = S._handoff_script(["sess-a"], restart=False)
+    assert "claudlet-attach" not in open(path, encoding="utf-8").read()
