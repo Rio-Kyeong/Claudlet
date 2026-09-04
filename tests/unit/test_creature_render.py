@@ -1,7 +1,7 @@
 import sys, os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QImage, QPainter
+from PyQt6.QtGui import QColor, QImage, QPainter
 from PyQt6.QtWidgets import QApplication
 from claudlet.core import creature as C
 
@@ -173,3 +173,44 @@ def test_draw_with_named_palette_no_error():
 
 def test_draw_with_unknown_palette_falls_back():
     _render_palette("does_not_exist")     # must not raise
+
+
+def test_project_palette_is_stable_across_calls():
+    # md5, not hash(): a salted str hash would recolour the pet every restart
+    a = C.palette_for_project("bnk-approval-fe")
+    b = C.palette_for_project("bnk-approval-fe")
+    assert a == b and a is not None
+
+
+def test_project_palette_has_the_four_roles():
+    p = C.palette_for_project("some-project")
+    assert set(p) == {"body", "hi", "lo", "bang"}
+    for v in p.values():
+        assert QColor(v).isValid(), v
+
+
+def test_project_palette_separates_projects_open_together():
+    names = ["bnk-approval-fe", "bnk-approval-be", "serafin_v2_be", "claudlet"]
+    bodies = {C.palette_for_project(n)["body"] for n in names}
+    assert len(bodies) == len(names), bodies
+
+
+def test_project_palette_without_a_project():
+    assert C.palette_for_project(None) is None
+    assert C.palette_for_project("") is None
+
+
+def test_palette_from_body_builds_shades_around_the_given_colour():
+    p = C.palette_from_body("#2FA88C")
+    assert p["body"] == "#2FA88C"
+    assert QColor(p["hi"]).lightness() > QColor(p["body"]).lightness()
+    assert QColor(p["lo"]).lightness() < QColor(p["body"]).lightness()
+
+
+def test_palette_from_body_rejects_nonsense():
+    assert C.palette_from_body("nonsense") is None
+    assert C.palette_from_body("") is None
+
+
+def test_draw_with_a_project_palette_dict_no_error():
+    _render_palette(C.palette_for_project("bnk-approval-fe"))

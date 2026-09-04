@@ -38,7 +38,10 @@ DEFAULT_DOCK = {"enabled": True, "anchor": dockgeom.DEFAULT_ANCHOR,
 
 SHINY_PALETTES = ("shiny_teal", "shiny_violet")
 SHINY_CHANCE = 0.02
-_PALETTE_NAMES = ("auto", "default") + SHINY_PALETTES
+# "project" colours each pet by the project it belongs to (see
+# creature.palette_for_project) so a dock row of identical sprites is
+# readable at a glance.
+_PALETTE_NAMES = ("auto", "default", "project") + SHINY_PALETTES
 
 
 def config_path():
@@ -102,6 +105,12 @@ def _clean(raw):
     palette = raw.get("palette")
     if palette not in _PALETTE_NAMES:
         palette = "auto"
+    # project -> body colour, pinning a project whose hashed colour collided
+    project_palettes = raw.get("project_palettes")
+    if not isinstance(project_palettes, dict):
+        project_palettes = {}
+    project_palettes = {str(k): str(v) for k, v in project_palettes.items()
+                        if isinstance(v, str) and v}
 
     def _rect(v):
         if not isinstance(v, dict):
@@ -123,6 +132,7 @@ def _clean(raw):
     return {"tool_states": tools, "event_states": events,
             "raw_events": raw_events, "lang": lang,
             "roam_area": roam_area, "no_go": no_go, "palette": palette,
+            "project_palettes": project_palettes,
             "dock": _clean_dock(raw.get("dock"))}
 
 
@@ -162,7 +172,7 @@ def resolve_palette(config_value, roll, pick=0.0):
             idx = int(pick * len(SHINY_PALETTES)) % len(SHINY_PALETTES)
             return SHINY_PALETTES[idx]
         return "default"
-    if config_value in ("default",) + SHINY_PALETTES:
+    if config_value in ("default", "project") + SHINY_PALETTES:
         return config_value
     return "default"
 
@@ -170,6 +180,7 @@ def resolve_palette(config_value, roll, pick=0.0):
 def _empty_config():
     return {"tool_states": {}, "event_states": {}, "raw_events": {},
             "lang": "auto", "roam_area": None, "no_go": [], "palette": "auto",
+            "project_palettes": {},
             "dock": default_dock()}
 
 

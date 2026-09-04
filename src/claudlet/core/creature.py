@@ -14,6 +14,8 @@ Public API:
         facing  : +1 faces right, -1 faces left
     GRID_W, GRID_H : bounding size in art pixels (multiply by u for device px)
 """
+import colorsys
+import hashlib
 import math
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import QRectF
@@ -104,6 +106,58 @@ PALETTES = {
     "shiny_teal":   {"body": "#2FA88C", "hi": "#7FD9C4", "lo": "#1C7361", "bang": "#1F5F52"},
     "shiny_violet": {"body": "#8B6FD4", "hi": "#BCA8EC", "lo": "#5E45A0", "bang": "#4A2F8A"},
 }
+
+
+# Per-project colouring: 12 hues far enough apart to tell at a glance, times two
+# tones (a plain one and a deeper, less saturated one). Hue alone collided too
+# readily -- 12 buckets over a handful of projects pairs some of them up, and two
+# same-coloured pets in one dock row defeat the point. The tone splits those.
+_PROJECT_HUES = tuple(range(0, 360, 30))
+# (saturation, lightness) of the body: plain, deep, pale
+_PROJECT_TONES = ((0.55, 0.55), (0.38, 0.44), (0.45, 0.68))
+
+
+def _shades(hue, sat, light):
+    def hexc(hu, s, l):
+        r, g, b = colorsys.hls_to_rgb(hu % 1.0, max(0.0, min(1.0, l)),
+                                      max(0.0, min(1.0, s)))
+        return "#%02X%02X%02X" % (int(r * 255), int(g * 255), int(b * 255))
+
+    return {"body": hexc(hue, sat, light),
+            "hi":   hexc(hue, sat + 0.10, light + 0.17),
+            "lo":   hexc(hue, sat, light - 0.17),
+            "bang": hexc(hue - 12 / 360.0, sat + 0.05, light - 0.07)}
+
+
+def palette_from_body(color):
+    """Build a full palette from one body colour ('#RRGGBB'), or None.
+
+    The escape hatch for the hashed project colours: 36 buckets over a long list
+    of projects will pair some of them up, and two same-coloured pets in a row
+    defeat the point, so a project can be pinned to a colour by hand.
+    """
+    c = QColor(color)
+    if not c.isValid():
+        return None
+    h, s, l, _a = c.getHslF()
+    return _shades(h if h >= 0 else 0.0, s, l)
+
+
+def palette_for_project(name):
+    """A stable palette for a project name — same project, same colour, always.
+
+    Pets are identical sprites, so with one per project a dock row says nothing
+    about which is which. The bucket comes from an md5 of the name, not hash():
+    Python salts str hashes per process, so the pet would change colour on every
+    restart. Highlight/shade/bang keep the original orange's relationships to the
+    body, so a recoloured pet still reads as the same creature.
+    """
+    if not name:
+        return None
+    h = int(hashlib.md5(name.encode("utf-8")).hexdigest()[:8], 16)
+    hue = _PROJECT_HUES[h % len(_PROJECT_HUES)] / 360.0
+    sat, light = _PROJECT_TONES[(h // len(_PROJECT_HUES)) % len(_PROJECT_TONES)]
+    return _shades(hue, sat, light)
 
 
 def palette_colors(palette):

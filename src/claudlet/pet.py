@@ -149,6 +149,11 @@ FOOT_Y = 89
 CROWN_ROW, FOOT_ROW = 3.0, 15.8
 
 PET_REACT_SEC = 1.5                     # 쓰다듬기 하트 반응 지속(초)
+# 클릭이냐 드래그냐를 가르는 이동량(맨해튼 px). 이 값을 넘으면 드래그로 보고
+# 클릭-포커스를 하지 않는다. 6px은 너무 좁았다 -- 원격 데스크톱에서는 포인터
+# 이동이 묶여 들어와 제자리 클릭에도 몇 px씩 튀고, 그러면 창이 안 올라온 채
+# 펫만 집었다 놓아진다. 던지기는 이보다 훨씬 멀리 움직이므로 영향이 없다.
+CLICK_SLOP = 14
 ANGER_CLICKS = 4                        # 이 횟수만큼 빠르게 누르면 화냄
 ANGER_CLICK_WINDOW = 1.2                # 연속 클릭 판정 시간(초)
 ANGER_DUR = 2.0                         # 화난 표정 지속(초)
@@ -509,9 +514,19 @@ class Pet(QWidget):
         self._no_go = cfg.get("no_go") or []
         self._zone_overlays = []             # one open ZoneOverlay per monitor
         self._zone_overlay = None            # back-compat handle (first overlay)
-        _pal = os.environ.get("CLAUDLET_PALETTE") or cfg.get("palette", "auto")
+        # Which project this session is in. A JetBrains IDE runs every open
+        # project in ONE process, so pid-ancestry can name the IDE but not the
+        # window -- click-to-focus needs this to pick ours (see
+        # platform/jetbrains.py), and the "project" palette colours the pet by
+        # it. Read from the transcript now so a pet attached mid-session already
+        # knows; hook events refresh it.
+        self._cwd = jetbrains.cwd_from_transcript(session_id)
+        self.project = jetbrains.project_name(self._cwd)
+        self._palette_cfg = os.environ.get("CLAUDLET_PALETTE") or cfg.get("palette", "auto")
+        self._project_palettes = cfg.get("project_palettes") or {}
         _rng = random.Random()
-        self._palette = petconfig.resolve_palette(_pal, _rng.random(), _rng.random())
+        self._palette_roll = (_rng.random(), _rng.random())
+        self._palette = self._resolve_palette()
         self.engine = StateEngine(is_focused=self._is_focused,
                                   tool_states=cfg["tool_states"],
                                   event_states=cfg["event_states"],
@@ -541,13 +556,6 @@ class Pet(QWidget):
         # -- every tab shares one pid, so pid-ancestry can't (see winterm.py).
         # None until the first hook event: click then just raises the window.
         self._tab_title = None
-        # Which project this session is in. A JetBrains IDE runs every open
-        # project in ONE process, so pid-ancestry can name the IDE but not the
-        # window -- click-to-focus needs this to pick ours (see
-        # platform/jetbrains.py). Read from the transcript now so a pet
-        # attached mid-session can already aim; hook events refresh it.
-        self._cwd = jetbrains.cwd_from_transcript(session_id)
-        self.project = jetbrains.project_name(self._cwd)
         self._companions = []                # agent followers, one per running agent
         self._departing = []                 # finished agents' companions waving goodbye
         self._throw_trail = []               # main-pet snapshots replayed by companions
@@ -838,6 +846,8 @@ class Pet(QWidget):
         if cwd and cwd != self._cwd:
             self._cwd = cwd                  # authoritative; beats the transcript scan
             self.project = jetbrains.project_name(cwd)
+            self._palette = self._resolve_palette()   # project colour follows it
+            self._update_tray_icon(force=True)
         self.engine.handle(ev, time.monotonic())
         now = time.monotonic()
         was_idle = self.claude_state in ("idle", "sleeping")
@@ -2228,7 +2238,7 @@ class Pet(QWidget):
             return
         g = e.globalPosition().toPoint()
         delta = g - self._press_global
-        if delta.manhattanLength() > 6:
+        if delta.manhattanLength() > CLICK_SLOP:
             self._moved = True
         newpos = self._press_winpos + delta
         self.x = float(newpos.x())
@@ -2583,6 +2593,23 @@ class Pet(QWidget):
         # left-click (Trigger) mirrors clicking the pet: raise the terminal
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._activate_claude()
+
+    def _resolve_palette(self):
+        """Palette name, or a colour dict when it depends on this session.
+
+        `draw_creature` takes either, so "project" resolves to real colours here
+        and every other value stays the name petconfig validated. Falls back to
+        the normal resolution while the project is still unknown (no transcript
+        yet, and no hook event so far).
+        """
+        name = petconfig.resolve_palette(self._palette_cfg, *self._palette_roll)
+        if name != "project":
+            return name
+        pinned = self._project_palettes.get(self.project or "")
+        if pinned:
+            return (C.PALETTES.get(pinned) or C.palette_from_body(pinned)
+                    or C.palette_for_project(self.project) or "default")
+        return C.palette_for_project(self.project) or "default"
 
     def _who(self):
         """'claudlet · <project> — <state>': which session this pet speaks for.
