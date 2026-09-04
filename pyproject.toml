@@ -29,6 +29,7 @@ claudlet-uninstall = "claudlet.cli.uninstall:_cli"
 claudlet-install-hooks = "claudlet.cli.install_hooks:main"
 claudlet-config = "claudlet.cli.configcli:_cli"
 claudlet-version = "claudlet.cli.versioncli:_cli"
+claudlet-sync = "claudlet.cli.sync:_cli"
 claudlet-macos-diag = "claudlet.cli.macos_diag:main"
 
 [tool.setuptools.dynamic]

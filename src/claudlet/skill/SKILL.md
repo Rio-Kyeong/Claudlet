@@ -135,47 +135,44 @@ Schema (all keys optional; unknown keys / invalid values are dropped):
 
 ## Update
 
-Two channels: **release** (`/claudlet update`, the latest PyPI release — stable;
-`master` holds only released tags) and **latest** (`/claudlet update latest`, the
-tip of the `develop` branch — newest, may be rough). Default to release unless
-the user asked for `latest`/`edge`/`develop`.
+**This install is a customised fork** (`Rio-Kyeong/Claudlet`, branch `custom`).
+It carries three things the upstream release does not, and the whole point is
+that they survive every update:
+
+1. pixel-grid rendering (no broken/shimmering art pixels),
+2. click-to-focus that picks THIS session's JetBrains project window,
+3. the project name printed under the pet.
+
+So **never run `pipx install --force claudlet`** — that pulls the plain PyPI
+release and silently throws all three away. The same goes for `pipx upgrade`.
 
 **Do NOT run the update yourself.** It changes the user's environment and must be
-followed by a session restart, so hand it to the user to run — and updating is
-also the one thing that shouldn't happen silently mid-session. Steps:
+followed by a session restart. Steps:
 
-1. **Show current vs latest** (this you may run — it's read-only):
+1. **Show current** (read-only, fine to run):
    ```bash
    cpet version
    ```
-2. **Detect install method** to pick the command: a source checkout has
-   `$HOME/claudlet/.git`; otherwise it's a pipx/pip install.
-3. **Give the user a `!`-prefixed command to run themselves** (so it runs in
-   their own shell with output visible), matching method + channel:
+2. **Hand the user a `!`-prefixed command**, so it runs in their shell with the
+   output visible:
 
-   | | release | latest (`develop`) |
-   |---|---|---|
-   | **pipx** | `! pipx install --force claudlet && claudlet-install` | `! pipx install --force "git+https://github.com/YeeDochi/Claudlet@develop" && claudlet-install` |
-   | **source checkout** | `! git -C ~/claudlet pull --ff-only && claudlet-install` | (same — a checkout already tracks its branch) |
+   | | command |
+   |---|---|
+   | **reinstall the customised build** | `! claudlet-sync` |
+   | **just reinstall, no upstream merge** | `! pipx install --force "git+https://github.com/Rio-Kyeong/Claudlet@custom" && claudlet-install` |
 
-   (Use `pipx install --force` for both pipx rows, NOT `pipx upgrade`: `upgrade`
-   re-fetches from whatever source the user first installed from, so a user on
-   the git/`@develop` install would get develop again even when they pick
-   *release*. `install --force claudlet` always pulls the PyPI release, so the
-   two channels switch cleanly in both directions. The *latest* channel needs
-   `git` on PATH; *release* does not — if git is missing, steer them to release.)
+   `claudlet-sync` is the full path: it clones the fork, merges the latest
+   upstream release into the `custom` branch, pushes, reinstalls and restarts the
+   pets. If the merge conflicts it stops and says so rather than guessing — that
+   means upstream changed the same lines as one of the three customisations, and
+   a human has to reconcile them.
 
-   (Tell them to type the line **including the leading `!`** — that runs it in
-   this Claude Code session's shell.)
-4. **Then reload**: the new hooks + pet code only take effect fresh. Tell them to
+3. **Then reload**: the new hooks + pet code only take effect fresh. Tell them to
    close any running pet (right-click → 종료), **exit this session, and re-enter
-   with `claude --continue`** (or start a new session). Until then the pet keeps
-   running the old code and the current session keeps the old hooks.
-5. **What changed**: point them at the release notes so they see what's new —
-   <https://github.com/YeeDochi/Claudlet/releases/latest> (`claudlet-install`
-   also prints this link, labelled in their language, when it finishes).
-
-If `git pull` fails (local changes / divergence), report it — don't force.
+   with `claude --continue`** (or start a new session).
+4. **Setting this up on another machine or account**: one command, nothing else
+   to copy — `pipx install "git+https://github.com/Rio-Kyeong/Claudlet@custom"`
+   then `claudlet-install`.
 
 ## Notes
 - Multiple pets are fine — each is independent. Stop one via right-click → 종료.
